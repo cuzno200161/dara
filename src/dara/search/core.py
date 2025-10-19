@@ -85,6 +85,9 @@ def search_phases(
     if refinement_params is None:
         refinement_params = {}
 
+    if not ray.is_initialized():
+        ray.init(runtime_env={"working_dir": None})
+
     phase_params = {**DEFAULT_PHASE_PARAMS, **phase_params}
     refinement_params = {**DEFAULT_REFINEMENT_PARAMS, **refinement_params}
 
