@@ -261,9 +261,12 @@ class PhaseSearchMaker(Maker):
             dumpfn(final_refinement_params, best_dir_path / "phase_params.json")
 
             logger.info("Performing final refinement on best result...")
+            best_phases = []
+            for p, foms in zip(results[0].phases, results[0].foms):
+                best_phases.append(max(zip(p, foms), key=lambda x: x[1])[0])
             best_result = do_refinement(
                 pattern_path=best_dir_path / "xrd_data.xy",
-                phases=[p[0] for p in results[0].phases],
+                phases=best_phases,
                 phase_params=final_refinement_params,
                 show_progress=True,
                 **search_kwargs,
