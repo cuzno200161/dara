@@ -63,7 +63,7 @@ def search_phases(
     Search for the best phases to use for refinement.
 
     Args:
-        pattern_path: the path to the pattern file. It has to be either in `.xrdml` or `.xy` format
+        pattern_path: the path to the pattern file. It has to be in `.xrdml`, `.xy`, `.raw`, or `.rasx` format
         phases: the paths to the CIF files
         pinned_phases: the paths to the pinned phases, which will be included in all the results
         max_phases: the maximum number of phases to refine

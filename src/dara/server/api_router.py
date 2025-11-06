@@ -24,7 +24,7 @@ from dara.utils import (
     get_compositional_clusters,
     get_head_of_compositional_cluster,
 )
-from dara.xrd import RawFile, XRDMLFile, XYFile
+from dara.xrd import RASXFile, RawFile, XRDMLFile, XYFile
 
 router = APIRouter(prefix="/api")
 
@@ -51,6 +51,8 @@ async def submit(
                 pattern = XRDMLFile.from_file(temp.name)
             elif name.endswith(".raw"):
                 pattern = RawFile.from_file(temp.name)
+            elif name.endswith(".rasx"):
+                pattern = RASXFile.from_file(temp.name)
             else:
                 print(pattern_file.filename)
                 raise HTTPException(status_code=400, detail="Invalid file format")

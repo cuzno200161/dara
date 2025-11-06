@@ -40,11 +40,12 @@ Click on "Submit" in the navigation menu to access the submission form.
 - `.xye` - Three-column format (2θ, intensity, error)
 - `.xrdml` - PANalytical/Malvern Panalytical XML format
 - `.raw` - Rigaku/Bruker raw data format
+- `.rasx` - Rigaku RASX powder diffraction format
 
 ### Step 3: Specify Precursor Information
 
 **Precursor Formulas:**
-Enter the chemical formulas of your starting materials, splitted by comma. 
+Enter the chemical formulas of your starting materials, splitted by comma.
 ```
 CaO, TiO2
 ```

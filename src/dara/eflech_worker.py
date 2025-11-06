@@ -20,7 +20,7 @@ from dara.generate_control_file import (
     trim_pattern,
 )
 from dara.utils import get_logger, get_wavelength, intensity_correction
-from dara.xrd import raw2xy, xrdml2xy
+from dara.xrd import rasx2xy, raw2xy, xrdml2xy
 
 logger = get_logger(__name__)
 
@@ -79,6 +79,8 @@ class EflechWorker:
                     pattern_path_temp = xrdml2xy(pattern, temp_dir)
                 elif pattern.suffix == ".raw":
                     pattern_path_temp = raw2xy(pattern, temp_dir)
+                elif pattern.suffix == ".rasx":
+                    pattern_path_temp = rasx2xy(pattern, temp_dir)
                 else:
                     raise ValueError(f"Unknown pattern file type: {pattern.suffix}")
 
