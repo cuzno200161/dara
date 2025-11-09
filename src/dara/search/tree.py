@@ -1039,12 +1039,14 @@ class SearchTree(BaseSearchTree):
 
     def _detect_peak_in_pattern(self) -> pd.DataFrame:
         logger.info("Detecting peaks in the pattern.")
-        if self.enable_angular_cut:
-            if self.refinement_params.get("wmax", None) is not None:
-                warnings.warn(
-                    f"The wmax ({self.refinement_params['wmax']}) in refinement_params "
-                    f"will be ignored. The wmax will be automatically adjusted."
-                )
+        if (
+            self.enable_angular_cut
+            and self.refinement_params.get("wmax", None) is not None
+        ):
+            warnings.warn(
+                f"The wmax ({self.refinement_params['wmax']}) in refinement_params "
+                f"will be ignored. The wmax will be automatically adjusted."
+            )
         peak_list = detect_peaks(
             self.pattern_path,
             wavelength=self.wavelength,
