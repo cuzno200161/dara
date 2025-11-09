@@ -933,6 +933,7 @@ class SearchTree(BaseSearchTree):
         wavelength: Literal["Cu", "Co", "Cr", "Fe", "Mo"] | float = "Cu",
         instrument_profile: str | Path = "Aeris-fds-Pixcel1d-Medipix3",
         express_mode: bool = True,
+        enable_angular_cut: bool = True,
         maximum_grouping_distance: float = 0.1,
         max_phases: float = 5,
         rpb_threshold: float = 4,
@@ -977,8 +978,10 @@ class SearchTree(BaseSearchTree):
             **kwargs,
         )
 
-        # side effect: sets self.peak_obs and self.refinement_params["wmax"] in the function
-        # also update the initial guess of b1 in self.refinement_params
+        # side effect: if enable_angular_cut is set to True (default),
+        # sets self.peak_obs and self.refinement_params["wmax"] in the function
+        # for all situation, will also update the initial guess of b1 in self.refinement_params
+        self.enable_angular_cut = enable_angular_cut
         self._detect_peak_in_pattern()
 
         self.intensity_threshold = min(
@@ -1036,11 +1039,12 @@ class SearchTree(BaseSearchTree):
 
     def _detect_peak_in_pattern(self) -> pd.DataFrame:
         logger.info("Detecting peaks in the pattern.")
-        if self.refinement_params.get("wmax", None) is not None:
-            warnings.warn(
-                f"The wmax ({self.refinement_params['wmax']}) in refinement_params "
-                f"will be ignored. The wmax will be automatically adjusted."
-            )
+        if self.enable_angular_cut:
+            if self.refinement_params.get("wmax", None) is not None:
+                warnings.warn(
+                    f"The wmax ({self.refinement_params['wmax']}) in refinement_params "
+                    f"will be ignored. The wmax will be automatically adjusted."
+                )
         peak_list = detect_peaks(
             self.pattern_path,
             wavelength=self.wavelength,
@@ -1050,15 +1054,18 @@ class SearchTree(BaseSearchTree):
         )
         if len(peak_list) == 0:
             raise ValueError("No peaks are detected in the pattern.")
-        optimal_wmax = get_optimal_max_two_theta(peak_list)
-        logger.info(f"The wmax is automatically adjusted to {optimal_wmax}.")
-        self.refinement_params["wmax"] = optimal_wmax
 
         peak_list_array = peak_list[["2theta", "intensity"]].values
 
-        self.peak_obs = peak_list_array[
-            np.where(peak_list_array[:, 0] < self.refinement_params["wmax"])
-        ]
+        if self.enable_angular_cut:
+            optimal_wmax = get_optimal_max_two_theta(peak_list)
+            logger.info(f"The wmax is automatically adjusted to {optimal_wmax}.")
+            self.refinement_params["wmax"] = optimal_wmax
+            self.peak_obs = peak_list_array[
+                np.where(peak_list_array[:, 0] < self.refinement_params["wmax"])
+            ]
+        else:
+            self.peak_obs = peak_list_array
 
         # estimate the mean b1 value from the pattern
         estimated_b1 = np.mean(peak_list["b1"].dropna().values)

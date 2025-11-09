@@ -53,6 +53,7 @@ def search_phases(
     wavelength: Literal["Cu", "Co", "Cr", "Fe", "Mo"] | float = "Cu",
     instrument_profile: str | Path = "Aeris-fds-Pixcel1d-Medipix3",
     express_mode: bool = True,
+    enable_angular_cut: bool = True,
     phase_params: dict[str, ...] | None = None,
     refinement_params: dict[str, ...] | None = None,
     return_search_tree: bool = False,
@@ -72,6 +73,8 @@ def search_phases(
         instrument_profile: the name of the instrument, or the path to the instrument configuration file (.geq)
         express_mode: whether to use express mode. In express mode, the phases will be grouped first before
             searching, which can significantly speed up the search process.
+        enable_angular_cut: whether to enable angular cut, which will run the search on a reduced pattern range
+            (wmin, wmax) to speed up the search process.
         phase_params: the parameters for the phase search
         refinement_params: the parameters for the refinement
         return_search_tree: whether to return the search tree. This is mainly used for debugging purposes.
@@ -101,6 +104,7 @@ def search_phases(
         wavelength=wavelength,
         instrument_profile=instrument_profile,
         express_mode=express_mode,
+        enable_angular_cut=enable_angular_cut,
         max_phases=max_phases,
         rpb_threshold=rpb_threshold,
         record_peak_matcher_scores=record_peak_matcher_scores,
