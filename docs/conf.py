@@ -41,7 +41,7 @@ extensions = [
     "sphinx.ext.mathjax",
     "sphinx.ext.ifconfig",
     "sphinx.ext.napoleon",
-    # "sphinx.ext.viewcode",
+    "sphinx.ext.viewcode",
     "sphinx.ext.githubpages",
     "sphinx_autodoc_typehints",
     "sphinxcontrib.autodoc_pydantic",
