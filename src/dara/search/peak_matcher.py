@@ -310,8 +310,8 @@ class PeakMatcher:
         self,
         matched_coeff: float = 1,
         wrong_intensity_coeff: float = 1,
-        missing_coeff: float = -0.1,
-        extra_coeff: float = -0.5,
+        missing_coeff: float = 0,
+        extra_coeff: float = 0,
         normalize: bool = True,
     ) -> float:
         """

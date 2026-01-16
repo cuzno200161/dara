@@ -432,9 +432,13 @@ class BaseSearchTree(Tree):
                 for phase, result in self.all_phases_result.items()
                 if phase not in current_phases_set
             }
+            print(f'DEBUG all phases_result keys = {[phase.path.stem for phase in all_phases_result.keys()]}')
             best_phases, scores, threshold = self.score_phases(
                 all_phases_result, node.data.current_result
             )
+            print(f'DEBUG : best_phases = {[phase.path.stem for phase in best_phases]}')
+            print(f'DEBUG : scores = {scores.values()}')
+            print(f'DEBUG : threshold = {threshold}')
 
             if self.record_peak_matcher_scores:
                 node.data.peak_matcher_scores = scores
@@ -764,10 +768,14 @@ class BaseSearchTree(Tree):
             )
             raw_scores = {}
 
+        for phase, score in scores.items():
+            print(f'DEBUG phase {phase.path.stem} raw score = {raw_scores[phase] if phase in raw_scores else score}')
+            print(f'DEBUG phase {phase.path.stem} score = {score}')
         peak_matcher_score_threshold, _ = find_optimal_score_threshold(
             list(scores.values())
         )
         peak_matcher_score_threshold = max(peak_matcher_score_threshold, 0)
+        print(f'DEBUG peak_matcher_score_threshold = {peak_matcher_score_threshold}')
 
         filtered_scores = {
             phase: score
@@ -1102,6 +1110,10 @@ class SearchTree(BaseSearchTree):
         )
 
     def _get_all_cleaned_phases_result(self) -> dict[RefinementPhase, RefinementResult]:
+        '''
+        Get the refinement result of all the phases, and clean up the initial
+        parameters based on the refinement result.
+        '''
         logger.info("Refining all the phases in the dataset.")
         pinned_phases_set = set(self.pinned_phases)
         cif_paths = [

@@ -418,10 +418,12 @@ def find_optimal_score_threshold(
     score_percentile = signal.savgol_filter(score_percentile, 5, 1)
 
     second_derivative = np.diff(score_percentile, n=2)
-    threshold = score_percentile[np.argmax(second_derivative)].item()
+    threshold_1 = score_percentile[np.argmax(second_derivative)].item()
 
-    # add a small tolerance to the threshold
-    threshold -= 0.01
+    # Second threshold based on 75th percentile
+    threshold_2 = np.percentile(scores, 75)
+    
+    threshold = max(threshold_1, threshold_2)
     return threshold, score_percentile
 
 
