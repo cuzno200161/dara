@@ -1,5 +1,4 @@
 """Phase search module."""
-
 from __future__ import annotations
 
 import copy
@@ -88,11 +87,10 @@ def search_phases(
     if refinement_params is None:
         refinement_params = {}
 
-    ray.shutdown()
     if not ray.is_initialized():
+        ray.shutdown()
         ray.init(
             local_mode=True,
-            include_dashboard=False,
             _metrics_export_port=None
         )
 

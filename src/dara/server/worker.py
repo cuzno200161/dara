@@ -12,7 +12,6 @@ from dara.server.utils import get_job_store, get_result_store, get_worker_store
 
 logger = logging.getLogger("dara.server.worker")
 
-
 def worker_process():
     """Start the Ray worker process."""
     logger.info("Starting worker process for job execution...")
@@ -33,7 +32,6 @@ def run_job(uuid):
         if not ray.is_initialized():
             ray.init(
                 local_mode=True,
-                include_dashboard=False,
                 _metrics_export_port=None
             )
 

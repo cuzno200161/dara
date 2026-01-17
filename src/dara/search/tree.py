@@ -63,6 +63,7 @@ def remote_do_refinement_no_saving(
             phase_params=phase_params,
             refinement_params=refinement_params,
         )
+        print(f'DEBUG refinement result Rwp = {result.lst_data.rwp} for {[phase.path.stem for phase in cif_paths]}')
     except (RuntimeError, TimeoutExpired, CIF2StrError) as e:
         logger.debug(f"Refinement failed for {cif_paths}, the reason is {e}")
         return None
@@ -1063,7 +1064,6 @@ class SearchTree(BaseSearchTree):
             wmin=self.refinement_params.get("wmin", None),
             wmax=None,
         )
-        print(f'DEBUG detected peaks:\n{peak_list}')
         if len(peak_list) == 0:
             raise ValueError("No peaks are detected in the pattern.")
 
@@ -1122,10 +1122,14 @@ class SearchTree(BaseSearchTree):
         cif_paths = [
             cif_path for cif_path in self.cif_paths if cif_path not in pinned_phases_set
         ]
+        print(f'DEBUG cif_paths = {[phase.path.stem for phase in cif_paths]}')
         all_phases_result = self.refine_phases(
             cif_paths,
             pinned_phases=self.pinned_phases,
         )
+
+        print(f'DEBUG all_phases_result keys before cleaning = {[phase.path.stem for phase in all_phases_result.keys()]}')
+        print(f'DEBUG all_phases_result values before cleaning = {[result.lst_data.rwp if result is not None else None for result in all_phases_result.values()]}')
 
         # adjust the initial value of eps1 based on the weighted average of all the phases
         if not isinstance(self.refinement_params.get("eps1", 0), Number):

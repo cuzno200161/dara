@@ -239,6 +239,7 @@ def get_result(control_file: Path) -> RefinementResult:
             "plot_data": parse_dia(dia_path, phase_names=phase_names),
             "peak_data": parse_par(par_path, phase_names=phase_names),
         }
+        print(f"DEBUG parsed result from control file: {result}")
 
         return RefinementResult(**result)
     except Exception as e:
