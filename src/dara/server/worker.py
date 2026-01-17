@@ -29,8 +29,13 @@ def run_job(uuid):
     """Run a job remotely by its UUID."""
     with get_worker_store() as worker_store:
         # launch ray earlier. To make sure it is run in a "pernament" folder that will not be deleted.
+        ray.shutdown()
         if not ray.is_initialized():
-            ray.init(runtime_env={"working_dir": None})
+            ray.init(
+                local_mode=True,
+                include_dashboard=False,
+                _metrics_export_port=None
+            )
 
         job = worker_store.query_one(criteria={"uuid": uuid})
         job["start_time"] = datetime.now(tz=timezone.utc)

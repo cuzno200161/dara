@@ -1055,6 +1055,7 @@ class SearchTree(BaseSearchTree):
                 f"The wmax ({self.refinement_params['wmax']}) in refinement_params "
                 f"will be ignored. The wmax will be automatically adjusted."
             )
+        print(f'DEBUG refinement_params before peak detection:\n{self.refinement_params}')
         peak_list = detect_peaks(
             self.pattern_path,
             wavelength=self.wavelength,
@@ -1062,6 +1063,7 @@ class SearchTree(BaseSearchTree):
             wmin=self.refinement_params.get("wmin", None),
             wmax=None,
         )
+        print(f'DEBUG detected peaks:\n{peak_list}')
         if len(peak_list) == 0:
             raise ValueError("No peaks are detected in the pattern.")
 
@@ -1076,6 +1078,7 @@ class SearchTree(BaseSearchTree):
             ]
         else:
             self.peak_obs = peak_list_array
+        print(f'DEBUG peak_obs after angular cut:\n{self.peak_obs}')
 
         # estimate the mean b1 value from the pattern
         estimated_b1 = np.mean(peak_list["b1"].dropna().values)
@@ -1137,7 +1140,8 @@ class SearchTree(BaseSearchTree):
                         * get_number(result.lst_data.EPS1)
                     )
                     rwp_sum += result.lst_data.rwp
-            weighted_eps1 /= rwp_sum
+            if rwp_sum > 0:
+                weighted_eps1 /= rwp_sum
             _, eps1_lower, eps1_upper = parse_refinement_param(
                 self.refinement_params["eps1"]
             )
@@ -1163,7 +1167,8 @@ class SearchTree(BaseSearchTree):
                         * get_number(result.lst_data.EPS2)
                     )
                     rwp_sum += result.lst_data.rwp
-            weighted_eps2 /= rwp_sum
+            if rwp_sum > 0:
+                weighted_eps2 /= rwp_sum
             _, eps2_lower, eps2_upper = parse_refinement_param(
                 self.refinement_params["eps2"]
             )
