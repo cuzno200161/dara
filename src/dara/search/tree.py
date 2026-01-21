@@ -414,11 +414,31 @@ class BaseSearchTree(Tree):
 
         self.all_phases_result = all_phases_result
         self.peak_obs = peak_obs
-        
-        self.stop_refinement = False
-        self.stop_reason = None
 
-    def expand_node(self, nid: str) -> list[str]:
+    def converges(self, isolated_missing_peaks, isolated_extra_peaks, new_result) -> bool:
+        """
+        Check if the search tree converges.
+        """
+        isolated_missing_peaks = np.asarray(isolated_missing_peaks, dtype=float)
+        isolated_extra_peaks   = np.asarray(isolated_extra_peaks, dtype=float)
+
+        max_intensity = max(new_result.plot_data.y_obs) if new_result is not None else 1.0
+        max_missing_peak_intensity = isolated_missing_peaks[:, 1].max() / max_intensity if isolated_missing_peaks.size != 0 else 0
+        max_extra_peak_intensity = isolated_extra_peaks[:, 1].max() / max_intensity if isolated_extra_peaks.size != 0 else 0
+        
+        max_false_peak_intensity = max(max_extra_peak_intensity, max_missing_peak_intensity)
+        
+        #print(f'DEBUG new_result.peak_data: {new_result.peak_data[["2theta", "intensity"]] if new_result is not None else None}')
+        #print(f'DEBUG isolated_missing_peaks: {isolated_missing_peaks}')
+        #print(f'DEBUG isolated_extra_peaks: {isolated_extra_peaks}')
+        print(f'DEBUG max_false_peak_intensity: {max_false_peak_intensity}')
+        print(f'DEBUG false_peak_threshold: {self.false_peak_threshold}')
+
+        if max_false_peak_intensity < self.false_peak_threshold:
+            return True
+        return False
+
+    def expand_node(self, nid: str, stop_flag=None) -> list[str]:
         """
         Expand a node in the search tree.
 
@@ -428,14 +448,7 @@ class BaseSearchTree(Tree):
         Args:
             nid: the node id
         """
-        
-        # Check whether early stopping has been applied
-        print(f'DEBUG self.stop_refinement = {self.stop_refinement}')
-        if self.stop_refinement:
-            logger.info(
-                f"Refinement already stopped. Skip node {nid}. "
-            )
-            return []
+        stop_refinement = False
         
         node: Node = self.get_node(nid)
         logger.info(
@@ -483,6 +496,10 @@ class BaseSearchTree(Tree):
                     grouped_results[phase]["group_id"] = i
 
             for phase, new_result in new_results.items():
+                if stop_refinement:
+                    print('DEBUG early stopping activated, break expansion loop')
+                    break
+
                 new_phases = [*node.data.current_phases, phase]
 
                 group_id = grouped_results[phase]["group_id"]
@@ -530,16 +547,6 @@ class BaseSearchTree(Tree):
                 print(f'DEBUG current phases: {[p.path.stem for p in new_phases]}')
                 print(f'DEBUG rwp: {new_result.lst_data.rpb if new_result is not None else None}')            
                 
-                # TODO early stop strategy can be implemented here
-                max_intensity = new_result.peak_data["intensity"].max() if new_result is not None else None
-                isolated_missing_peaks = np.asarray(isolated_missing_peaks, dtype=float)
-                isolated_extra_peaks   = np.asarray(isolated_extra_peaks, dtype=float)
-                max_missing_peak_intensity = isolated_missing_peaks[:, 1].max() / max_intensity if isolated_missing_peaks.size != 0 else 0
-                max_extra_peak_intensity = isolated_extra_peaks[:, 1].max() / max_intensity if isolated_extra_peaks.size != 0 else 0
-                max_false_peak_intensity = max(max_extra_peak_intensity, max_missing_peak_intensity)
-                
-                print(f'DEBUG max_false_peak_intensity: {max_false_peak_intensity}')
-
                 if new_result is None:
                     status = "error"
 
@@ -562,19 +569,23 @@ class BaseSearchTree(Tree):
                     != len(new_phases)
                 ):
                     status = "no_improvement"
+                # Removing low weight fraction check for now
                 #elif is_low_weight_fraction:
                 #    status = "low_weight_fraction"
                 elif not is_best_result_in_group:
                     status = "similar_structure"
                 elif len(new_phases) >= self.max_phases:
                     status = "max_depth"
-                elif self.early_stopping and max_false_peak_intensity < self.false_peak_threshold:
-                    self.stop_refinement = True
+                elif self.early_stopping and \
+                        new_result is not None and \
+                        self.converges(isolated_missing_peaks, isolated_extra_peaks, new_result) :
+                    stop_refinement = True
                     logger.info(
                         f"Early stopping triggered at node {nid} with phases {[p.path.stem for p in new_phases]}. \n"
-                        f"Reason: Maximum false peak intensity {max_false_peak_intensity:.4f} \n"
-                        f"is below the threshold {self.false_peak_threshold}."
                     )
+                    status = "early_stop"
+                    if stop_flag is not None:
+                        ray.get(stop_flag.set.remote())
                 else:
                     status = "pending"
 
@@ -588,6 +599,7 @@ class BaseSearchTree(Tree):
                         isolated_missing_peaks=isolated_missing_peaks,
                         fom=fom,
                         lattice_strain=grouped_results[phase]["lattice_strain"],
+                        early_stop=stop_refinement
                     ),
                     parent=nid,
                 )
@@ -621,9 +633,9 @@ class BaseSearchTree(Tree):
             if self.get_node(child.identifier).data.status == "pending"
         ]
 
-    def expand_root(self) -> list[str]:
+    def expand_root(self, stop_flag=None) -> list[str]:
         """Expand the root node."""
-        return self.expand_node(self.root)
+        return self.expand_node(self.root, stop_flag=stop_flag)
 
     def get_all_possible_nodes_at_same_level(self, node: Node) -> tuple[Node, ...]:
         """
@@ -640,6 +652,7 @@ class BaseSearchTree(Tree):
             "expanded",
             "max_depth",
             "similar_structure",
+            "early_stop",
         }:
             raise ValueError(f"Node with id {node.identifier} is not expanded.")
         if node.data.group_id == -1:
@@ -652,7 +665,7 @@ class BaseSearchTree(Tree):
             for node_at_same_level in nodes_at_same_level
             if node_at_same_level.data.group_id == node.data.group_id
             and node_at_same_level.data.status
-            in {"similar_structure", "expanded", "max_depth"}
+            in {"similar_structure", "expanded", "max_depth", "early_stop"}
         ]
 
         phases_at_same_level = sorted(
@@ -678,7 +691,7 @@ class BaseSearchTree(Tree):
         -------
             a tuple of the phase combinations
         """
-        if node.data.status not in {"expanded", "max_depth"}:
+        if node.data.status not in {"expanded", "max_depth", "early_stop"}:
             raise ValueError(f"Node with id {node.identifier} is not expanded.")
 
         # set up the default value for the current_phases
@@ -944,19 +957,20 @@ class BaseSearchTree(Tree):
             raise ValueError(f"Node with id {root_nid} does not exist.")
 
         new_search_tree = cls(
-            max_phases=search_tree.max_phases,
+            intensity_threshold=search_tree.intensity_threshold,
             pattern_path=search_tree.pattern_path,
             all_phases_result=search_tree.all_phases_result,
             peak_obs=search_tree.peak_obs,
-            rpb_threshold=search_tree.rpb_threshold,
+            pinned_phases=search_tree.pinned_phases,
             refine_params=search_tree.refinement_params,
             phase_params=search_tree.phase_params,
-            intensity_threshold=search_tree.intensity_threshold,
             wavelength=search_tree.wavelength,
             instrument_profile=search_tree.instrument_profile,
             express_mode=search_tree.express_mode,
             maximum_grouping_distance=search_tree.maximum_grouping_distance,
-            pinned_phases=search_tree.pinned_phases,
+            max_phases=search_tree.max_phases,
+            rpb_threshold=search_tree.rpb_threshold,
+            false_peak_threshold=search_tree.false_peak_threshold,
             record_peak_matcher_scores=search_tree.record_peak_matcher_scores,
             score_coefficients=search_tree.score_coefficients,
             early_stopping=search_tree.early_stopping,
@@ -1141,6 +1155,8 @@ class SearchTree(BaseSearchTree):
                 f"The wmax ({self.refinement_params['wmax']}) in refinement_params "
                 f"will be ignored. The wmax will be automatically adjusted."
             )
+
+        time_start = time.time()
         peak_list = detect_peaks(
             self.pattern_path,
             wavelength=self.wavelength,
@@ -1148,6 +1164,8 @@ class SearchTree(BaseSearchTree):
             wmin=self.refinement_params.get("wmin", None),
             wmax=None,
         )
+        time_end = time.time()
+        print(f"DEBUG Peak detection took {time_end - time_start:.2f} seconds.")
         if len(peak_list) == 0:
             raise ValueError("No peaks are detected in the pattern.")
 
@@ -1324,8 +1342,8 @@ class SearchTree(BaseSearchTree):
         for node in self.nodes.values():
             if node.data.current_result is None:
                 continue
-            if node.data.status in {"expanded", "max_depth"} and all(
-                child.data.status not in {"expanded", "max_depth"}
+            if node.data.status in {"expanded", "max_depth", "early_stop"} and all(
+                child.data.status not in {"expanded", "max_depth", "early_stop"}
                 for child in self.children(node.identifier)
             ):
                 phases, foms, lattice_strains = self.get_phase_combinations(node)

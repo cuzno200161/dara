@@ -27,22 +27,42 @@ DEFAULT_PHASE_PARAMS = {
 }
 DEFAULT_REFINEMENT_PARAMS = {"n_threads": 8, "eps1": 0, "eps2": "0_-0.05^0.05"}
 
+@ray.remote
+class StopFlag:
+    def __init__(self):
+        self.stop = False
+
+    def set(self):
+        self.stop = True
+
+    def get(self):
+        return self.stop
 
 @ray.remote
-def _remote_expand_node(search_tree: BaseSearchTree) -> BaseSearchTree:
-    """Expand a node in the search tree."""
+def _remote_expand_node(search_tree: BaseSearchTree, stop_flag) -> BaseSearchTree:
     try:
-        search_tree.expand_root()
+        # Check if we should even start
+        if ray.get(stop_flag.get.remote()):
+            return search_tree
+
+        # Pass the stop_flag into the expansion logic
+        search_tree.expand_root(stop_flag=stop_flag) 
         return search_tree
+    except ray.exceptions.TaskCancelledError:
+        print("Task was cancelled remotely. Returning current state.")
+        return search_tree  # Return the tree as it is even if partial
     except Exception as e:
         print_exc()
         raise e
 
 
-def remote_expand_node(search_tree: SearchTree, nid: str) -> ray.ObjectRef:
-    """Expand a node in the search tree."""
+def remote_expand_node(search_tree, nid, stop_flag):
+    # Check shared stop flag
+    if ray.get(stop_flag.get.remote()):
+        return None  # skip expansion
+
     subtree = BaseSearchTree.from_search_tree(root_nid=nid, search_tree=search_tree)
-    return _remote_expand_node.remote(subtree)
+    return _remote_expand_node.remote(subtree, stop_flag)
 
 
 def search_phases(
@@ -121,7 +141,8 @@ def search_phases(
     )
 
     max_worker = ray.cluster_resources()["CPU"]
-    pending = [remote_expand_node(search_tree, search_tree.root)]
+    stop_flag = StopFlag.remote()
+    pending = [remote_expand_node(search_tree, search_tree.root, stop_flag)]
     to_be_submitted = deque()
 
     while pending:
@@ -136,9 +157,21 @@ def search_phases(
             for nid in search_tree.get_expandable_children(remote_search_tree.root):
                 to_be_submitted.append(nid)
 
+        # Check flag before even considering the queue
+        if ray.get(stop_flag.get.remote()):
+            print("Early stop detected! Clearing queue and canceling active tasks...")
+            # Clear the queue so no new tasks start
+            to_be_submitted.clear() 
+            for task_ref in pending:
+                ray.cancel(task_ref, force=True, recursive=True)
+            
+            # Clear the list so the 'while pending' loop exits
+            pending = []
+            break
+
         while len(pending) < max_worker and to_be_submitted:
             nid = to_be_submitted.popleft()
-            pending.append(remote_expand_node(search_tree, nid))
+            pending.append(remote_expand_node(search_tree, nid, stop_flag))
 
     if not return_search_tree:
         return search_tree.get_search_results()
