@@ -7,6 +7,7 @@ from traceback import print_exc
 from typing import TYPE_CHECKING, Literal
 
 import ray
+import os
 
 from dara.search.tree import BaseSearchTree, SearchTree
 
@@ -57,7 +58,10 @@ def search_phases(
     refinement_params: dict[str, ...] | None = None,
     return_search_tree: bool = False,
     record_peak_matcher_scores: bool = False,
+    score_coefficients: dict[str, float] | None = None,
+    false_peak_threshold: float = 0.05,
     rpb_threshold: float = 2,
+    early_stopping: bool = False,
 ) -> list[SearchResult] | SearchTree:
     """
     Search for the best phases to use for refinement.
@@ -79,7 +83,9 @@ def search_phases(
         return_search_tree: whether to return the search tree. This is mainly used for debugging purposes.
         record_peak_matcher_scores: whether to record the peak matcher scores. This is mainly used for
             debugging purposes.
+        score_coefficients: the coefficients for the peak match score calculation    
         rpb_threshold: the RPB threshold
+        early_stopping: whether to enable early stopping
     """
     if phase_params is None:
         phase_params = {}
@@ -88,11 +94,9 @@ def search_phases(
         refinement_params = {}
 
     if not ray.is_initialized():
-        ray.shutdown()
-        ray.init(
-            local_mode=True,
-            _metrics_export_port=None
-        )
+        num_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", 4))
+        ray.init(num_cpus=num_cpus, _metrics_export_port=None)
+        print("DEBUG: Ray resources:", ray.available_resources())
 
     phase_params = {**DEFAULT_PHASE_PARAMS, **phase_params}
     refinement_params = {**DEFAULT_REFINEMENT_PARAMS, **refinement_params}
@@ -110,7 +114,10 @@ def search_phases(
         enable_angular_cut=enable_angular_cut,
         max_phases=max_phases,
         rpb_threshold=rpb_threshold,
+        false_peak_threshold=false_peak_threshold,
         record_peak_matcher_scores=record_peak_matcher_scores,
+        score_coefficients=score_coefficients,
+        early_stopping=early_stopping,
     )
 
     max_worker = ray.cluster_resources()["CPU"]

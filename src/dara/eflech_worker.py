@@ -49,7 +49,7 @@ class EflechWorker:
         pattern: Path | np.ndarray | str,
         wavelength: Literal["Cu", "Co", "Cr", "Fe", "Mo"] | float = "Cu",
         instrument_profile: str | Path = "Aeris-fds-Pixcel1d-Medipix3",
-        show_progress: bool = True,
+        show_progress: bool = False,
         *,
         wmin: float = None,
         wmax: float = None,

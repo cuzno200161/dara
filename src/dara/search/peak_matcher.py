@@ -77,7 +77,8 @@ def find_best_match(
             the indices of the missing peaks in the ``obs peaks``
         matched[i, j]:
             the indices of both the matched peaks in the ``calculated peaks``
-            and the ``observed peaks`` extra[i]: the indices of the extra peaks in the
+            and the ``observed peaks`` 
+        extra[i]: the indices of the extra peaks in the
             ``calculated peaks``
         wrong_intensity[i, j]:
             the indices of the peaks with wrong intensities in both
@@ -309,10 +310,9 @@ class PeakMatcher:
     def score(
         self,
         matched_coeff: float = 1,
-        wrong_intensity_coeff: float = 1,
+        wrong_intensity_coeff: float = 0,
         missing_coeff: float = 0,
         extra_coeff: float = 0,
-        normalize: bool = True,
     ) -> float:
         """
         Calculate the score of the matching result.
@@ -322,7 +322,6 @@ class PeakMatcher:
             wrong_intensity_coeff: the coefficient of the peaks with wrong intensities
             missing_coeff: the coefficient of the missing peaks
             extra_coeff: the coefficient of the extra peaks
-            normalize: whether to normalize the score by the total intensity of the observed peaks
 
         Returns
         -------
@@ -336,18 +335,29 @@ class PeakMatcher:
         )
         missing_obs = self.missing
         extra_calc = self.extra
+        
+        eps = 1e-12
+
+        I_matched = np.sum(np.abs(matched_peaks[:, 1]))
+        I_wrong_intensity = np.sum(np.abs(wrong_intens_peaks[:, 1]))
+        I_missing = np.sum(np.abs(missing_obs[:, 1]))
+        I_extra = np.sum(np.abs(extra_calc[:, 1]))
+        
+        I_obs = np.sum(np.abs(self.peak_obs[:, 1]))  + eps 
+        I_phase = I_matched + I_wrong_intensity + I_extra
+
+        ratio_matched = I_matched / I_phase
+        ratio_wrong_intensity = I_wrong_intensity / I_phase
+        ratio_extra = I_extra / I_phase
+        ratio_missing = I_missing / I_obs
 
         score = (
-            np.sum(np.abs(matched_peaks[:, 1])) * matched_coeff
-            + np.sum(np.abs(wrong_intens_peaks[:, 1])) * wrong_intensity_coeff
-            + np.sum(np.abs(extra_calc[:, 1])) * extra_coeff
-            + np.sum(np.abs(missing_obs[:, 1])) * missing_coeff
+            matched_coeff * ratio_matched
+            + wrong_intensity_coeff * ratio_wrong_intensity
+            + extra_coeff * ratio_extra
+            + missing_coeff * ratio_missing
         )
-
-        if normalize:
-            total_peak_obs = np.sum(np.abs(self.peak_obs[:, 1]))
-            score /= total_peak_obs
-
+        
         return score
 
     def jaccard_index(self) -> float:

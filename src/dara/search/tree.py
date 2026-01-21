@@ -6,6 +6,7 @@ from numbers import Number
 from pathlib import Path
 from subprocess import TimeoutExpired
 from typing import TYPE_CHECKING, Literal
+import time
 
 import jenkspy
 import numpy as np
@@ -55,6 +56,7 @@ def remote_do_refinement_no_saving(
     if len(cif_paths) == 0:
         return None
     try:
+        time_start = time.time()
         result = do_refinement_no_saving(
             pattern_path,
             cif_paths,
@@ -63,7 +65,8 @@ def remote_do_refinement_no_saving(
             phase_params=phase_params,
             refinement_params=refinement_params,
         )
-        print(f'DEBUG refinement result Rwp = {result.lst_data.rwp} for {[phase.path.stem for phase in cif_paths]}')
+        time_end = time.time()
+        print(f"Refinement took {time_end - time_start:.2f} seconds for {[phase.path.stem for phase in cif_paths]}")
     except (RuntimeError, TimeoutExpired, CIF2StrError) as e:
         logger.debug(f"Refinement failed for {cif_paths}, the reason is {e}")
         return None
@@ -365,6 +368,8 @@ class BaseSearchTree(Tree):
         max_phases: the maximum number of phases
         rpb_threshold: the minimum RPB improvement in each step
         pinned_phases: the phases that are pinned and will be included in all the results
+        score_coefficients: the coefficients for the peak match score calculation
+        early_stopping: whether to enable early stopping
     """
 
     def __init__(
@@ -380,9 +385,12 @@ class BaseSearchTree(Tree):
         express_mode: bool,
         maximum_grouping_distance: float,
         max_phases: float,
-        rpb_threshold: float,
+        rpb_threshold: float = 2.0,
+        false_peak_threshold: float = 0.05,
         pinned_phases: list[RefinementPhase] | None = None,
         record_peak_matcher_scores: bool = False,
+        score_coefficients: dict[str, float] | None = None,
+        early_stopping: bool = False,
         *args,
         **kwargs,
     ):
@@ -400,9 +408,15 @@ class BaseSearchTree(Tree):
         self.max_phases = max_phases
         self.pinned_phases = pinned_phases
         self.record_peak_matcher_scores = record_peak_matcher_scores
+        self.score_coefficients = score_coefficients
+        self.early_stopping = early_stopping
+        self.false_peak_threshold = false_peak_threshold
 
         self.all_phases_result = all_phases_result
         self.peak_obs = peak_obs
+        
+        self.stop_refinement = False
+        self.stop_reason = None
 
     def expand_node(self, nid: str) -> list[str]:
         """
@@ -414,6 +428,15 @@ class BaseSearchTree(Tree):
         Args:
             nid: the node id
         """
+        
+        # Check whether early stopping has been applied
+        print(f'DEBUG self.stop_refinement = {self.stop_refinement}')
+        if self.stop_refinement:
+            logger.info(
+                f"Refinement already stopped. Skip node {nid}. "
+            )
+            return []
+        
         node: Node = self.get_node(nid)
         logger.info(
             f"Expanding node {nid} with current phases {node.data.current_phases}, "
@@ -435,10 +458,9 @@ class BaseSearchTree(Tree):
             }
             print(f'DEBUG all phases_result keys = {[phase.path.stem for phase in all_phases_result.keys()]}')
             best_phases, scores, threshold = self.score_phases(
-                all_phases_result, node.data.current_result
+                all_phases_result, node.data.current_result, self.score_coefficients
             )
-            print(f'DEBUG : best_phases = {[phase.path.stem for phase in best_phases]}')
-            print(f'DEBUG : scores = {scores.values()}')
+            print(f'DEBUG : best_phases = {best_phases}')
             print(f'DEBUG : threshold = {threshold}')
 
             if self.record_peak_matcher_scores:
@@ -492,21 +514,31 @@ class BaseSearchTree(Tree):
                     )
                 else:
                     is_low_weight_fraction = False
+                
 
                 if new_result is not None:
                     peak_matcher = PeakMatcher(
                         new_result.peak_data[["2theta", "intensity"]].values,
                         self.peak_obs,
                     )
-                    isolated_missing_peaks = peak_matcher.get_isolated_peaks(
-                        peak_type="missing"
-                    ).tolist()
-                    isolated_extra_peaks = peak_matcher.get_isolated_peaks(
-                        peak_type="extra"
-                    ).tolist()
+                    isolated_missing_peaks = peak_matcher.get_isolated_peaks(peak_type="missing")
+                    isolated_extra_peaks = peak_matcher.get_isolated_peaks(peak_type="extra")
                 else:
-                    isolated_missing_peaks = [[]]
-                    isolated_extra_peaks = [[]]
+                    isolated_missing_peaks = []
+                    isolated_extra_peaks = []
+
+                print(f'DEBUG current phases: {[p.path.stem for p in new_phases]}')
+                print(f'DEBUG rwp: {new_result.lst_data.rpb if new_result is not None else None}')            
+                
+                # TODO early stop strategy can be implemented here
+                max_intensity = new_result.peak_data["intensity"].max() if new_result is not None else None
+                isolated_missing_peaks = np.asarray(isolated_missing_peaks, dtype=float)
+                isolated_extra_peaks   = np.asarray(isolated_extra_peaks, dtype=float)
+                max_missing_peak_intensity = isolated_missing_peaks[:, 1].max() / max_intensity if isolated_missing_peaks.size != 0 else 0
+                max_extra_peak_intensity = isolated_extra_peaks[:, 1].max() / max_intensity if isolated_extra_peaks.size != 0 else 0
+                max_false_peak_intensity = max(max_extra_peak_intensity, max_missing_peak_intensity)
+                
+                print(f'DEBUG max_false_peak_intensity: {max_false_peak_intensity}')
 
                 if new_result is None:
                     status = "error"
@@ -530,12 +562,19 @@ class BaseSearchTree(Tree):
                     != len(new_phases)
                 ):
                     status = "no_improvement"
-                elif is_low_weight_fraction:
-                    status = "low_weight_fraction"
+                #elif is_low_weight_fraction:
+                #    status = "low_weight_fraction"
                 elif not is_best_result_in_group:
                     status = "similar_structure"
                 elif len(new_phases) >= self.max_phases:
                     status = "max_depth"
+                elif self.early_stopping and max_false_peak_intensity < self.false_peak_threshold:
+                    self.stop_refinement = True
+                    logger.info(
+                        f"Early stopping triggered at node {nid} with phases {[p.path.stem for p in new_phases]}. \n"
+                        f"Reason: Maximum false peak intensity {max_false_peak_intensity:.4f} \n"
+                        f"is below the threshold {self.false_peak_threshold}."
+                    )
                 else:
                     status = "pending"
 
@@ -681,6 +720,7 @@ class BaseSearchTree(Tree):
         self,
         all_phases_result: dict[RefinementPhase, RefinementResult],
         current_result: RefinementResult | None = None,
+        score_coefficients: dict[str, float] | None = None,
     ) -> tuple[list[RefinementPhase], dict[RefinementPhase, list[float]], float]:
         """
         Get the best matched phases.
@@ -693,6 +733,7 @@ class BaseSearchTree(Tree):
         Args:
             all_phases_result: the result of all the phases
             current_result: the current result
+            score_coefficients: the coefficients for the score calculation
 
         Returns
         -------
@@ -714,6 +755,15 @@ class BaseSearchTree(Tree):
             for phase, refinement_result in all_phases_result.items()
         ]
 
+        peak_counts = {
+            phase: len(
+                refinement_result.peak_data[
+                    refinement_result.peak_data["phase"] == phase.path.stem
+                ]
+            )
+            for phase, refinement_result in all_phases_result.items()
+        }
+
         if self.record_peak_matcher_scores:
             peak_matchers = dict(
                 zip_longest(
@@ -724,9 +774,17 @@ class BaseSearchTree(Tree):
                     fillvalue=None,
                 )
             )
+            
+            matched_coeff = score_coefficients.get('matched_coeff', 1.0) if score_coefficients else 1.0
+            wrong_intensity_coeff = score_coefficients.get('wrong_intensity_coeff', 0.0) if score_coefficients else 0.0
+            missing_coeff = score_coefficients.get('missing_coeff', 1.0) if score_coefficients else 0.0
+            extra_coeff = score_coefficients.get('extra_coeff', 1.0) if score_coefficients else 0.0
 
             scores = {
-                k: v.score() if v is not None else 0 for k, v in peak_matchers.items()
+                k: v.score(matched_coeff=matched_coeff, 
+                           wrong_intensity_coeff=wrong_intensity_coeff, 
+                           missing_coeff=missing_coeff, 
+                           extra_coeff=extra_coeff) if v is not None else 0 for k, v in peak_matchers.items()
             }
 
             raw_scores = {}
@@ -775,17 +833,29 @@ class BaseSearchTree(Tree):
         peak_matcher_score_threshold, _ = find_optimal_score_threshold(
             list(scores.values())
         )
-        peak_matcher_score_threshold = max(peak_matcher_score_threshold, 0)
+        #peak_matcher_score_threshold = max(peak_matcher_score_threshold, 0)
         print(f'DEBUG peak_matcher_score_threshold = {peak_matcher_score_threshold}')
 
         filtered_scores = {
             phase: score
             for phase, score in scores.items()
-            if score >= peak_matcher_score_threshold
+            if score >= peak_matcher_score_threshold and score > 0
         }
 
+        
+        # Phases with more peaks are refined first
+        filtered_scores = dict(
+            sorted(
+                filtered_scores.items(),
+                key=lambda item: peak_counts.get(item[0], 0),
+                reverse=True,
+            )
+        )
+        print('DEBUG Scores after sorting based on peak counts:')
+        print(filtered_scores)
+
         return (
-            sorted(filtered_scores, key=lambda x: filtered_scores[x], reverse=True),
+            filtered_scores,
             raw_scores,
             peak_matcher_score_threshold,
         )
@@ -800,7 +870,7 @@ class BaseSearchTree(Tree):
 
         Args:
             phases: the phases
-            pinned_phases: the pinned phases thta will be included in all the refinement
+            pinned_phases: the pinned phases theta will be included in all the refinement
 
         Returns
         -------
@@ -850,6 +920,8 @@ class BaseSearchTree(Tree):
             maximum_grouping_distance=self.maximum_grouping_distance,
             pinned_phases=self.pinned_phases,
             express_mode=self.express_mode,
+            early_stopping=self.early_stopping,
+            record_peak_matcher_scores=self.record_peak_matcher_scores,
         )
 
     @classmethod
@@ -886,6 +958,8 @@ class BaseSearchTree(Tree):
             maximum_grouping_distance=search_tree.maximum_grouping_distance,
             pinned_phases=search_tree.pinned_phases,
             record_peak_matcher_scores=search_tree.record_peak_matcher_scores,
+            score_coefficients=search_tree.score_coefficients,
+            early_stopping=search_tree.early_stopping,
         )
         new_search_tree.add_node(root_node)
 
@@ -930,6 +1004,10 @@ class SearchTree(BaseSearchTree):
         maximum_grouping_distance: the maximum grouping distance, default to 0.1
         max_phases: the maximum number of phases, note that the pinned phases are COUNTED as well
         rpb_threshold: the minimium Rpb improvement for the search tree to continue to expand one node.
+        record_peak_matcher_scores: whether to record the peak matcher scores for each phase at each node
+        score_coefficients: the coefficients for the peak match score calculation
+        early_stopping: whether to enable early stopping
+        false_peak_threshold: the threshold for false peak intensity to trigger early stopping
     """
 
     def __init__(
@@ -946,7 +1024,10 @@ class SearchTree(BaseSearchTree):
         maximum_grouping_distance: float = 0.1,
         max_phases: float = 5,
         rpb_threshold: float = 4,
+        false_peak_threshold: float = 0.05,
         record_peak_matcher_scores: bool = False,
+        score_coefficients: dict[str, float] | None = None,
+        early_stopping: bool = False,
         *args,
         **kwargs,
     ):
@@ -981,8 +1062,11 @@ class SearchTree(BaseSearchTree):
             maximum_grouping_distance,
             max_phases,
             rpb_threshold,
+            false_peak_threshold,
             self.pinned_phases,
             record_peak_matcher_scores,
+            score_coefficients,
+            early_stopping,
             *args,
             **kwargs,
         )
@@ -1005,6 +1089,7 @@ class SearchTree(BaseSearchTree):
         root_node = self._create_root_node()
         self.add_node(root_node)
 
+        # Do peak matching first
         all_phases_result = self._get_all_cleaned_phases_result()
 
         if self.express_mode:
@@ -1056,7 +1141,6 @@ class SearchTree(BaseSearchTree):
                 f"The wmax ({self.refinement_params['wmax']}) in refinement_params "
                 f"will be ignored. The wmax will be automatically adjusted."
             )
-        print(f'DEBUG refinement_params before peak detection:\n{self.refinement_params}')
         peak_list = detect_peaks(
             self.pattern_path,
             wavelength=self.wavelength,
@@ -1078,7 +1162,6 @@ class SearchTree(BaseSearchTree):
             ]
         else:
             self.peak_obs = peak_list_array
-        print(f'DEBUG peak_obs after angular cut:\n{self.peak_obs}')
 
         # estimate the mean b1 value from the pattern
         estimated_b1 = np.mean(peak_list["b1"].dropna().values)
@@ -1122,14 +1205,12 @@ class SearchTree(BaseSearchTree):
         cif_paths = [
             cif_path for cif_path in self.cif_paths if cif_path not in pinned_phases_set
         ]
-        print(f'DEBUG cif_paths = {[phase.path.stem for phase in cif_paths]}')
         all_phases_result = self.refine_phases(
             cif_paths,
             pinned_phases=self.pinned_phases,
         )
 
-        print(f'DEBUG all_phases_result keys before cleaning = {[phase.path.stem for phase in all_phases_result.keys()]}')
-        print(f'DEBUG all_phases_result values before cleaning = {[result.lst_data.rwp if result is not None else None for result in all_phases_result.values()]}')
+        print(f'DEBUG all_phases_result key:value pairs: { {phase.path.stem: (result.lst_data.rwp if result is not None else None) for phase, result in all_phases_result.items()} }')
 
         # adjust the initial value of eps1 based on the weighted average of all the phases
         if not isinstance(self.refinement_params.get("eps1", 0), Number):

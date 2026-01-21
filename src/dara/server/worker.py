@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
@@ -28,12 +29,10 @@ def run_job(uuid):
     """Run a job remotely by its UUID."""
     with get_worker_store() as worker_store:
         # launch ray earlier. To make sure it is run in a "pernament" folder that will not be deleted.
-        ray.shutdown()
         if not ray.is_initialized():
-            ray.init(
-                local_mode=True,
-                _metrics_export_port=None
-            )
+            num_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", 4))
+            ray.init(num_cpus=num_cpus, _metrics_export_port=None)
+            print("DEBUG: Ray resources:", ray.available_resources())
 
         job = worker_store.query_one(criteria={"uuid": uuid})
         job["start_time"] = datetime.now(tz=timezone.utc)
