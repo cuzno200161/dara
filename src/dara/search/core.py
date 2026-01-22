@@ -8,12 +8,13 @@ from typing import TYPE_CHECKING, Literal
 
 import ray
 import os
+import numpy as np
 
 from dara.search.tree import BaseSearchTree, SearchTree
+from dara.xrd import rasx2xy, raw2xy, xrdml2xy
+from pathlib import Path
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from dara.refine import RefinementPhase
     from dara.search.data_model import SearchResult
 
@@ -37,6 +38,9 @@ class StopFlag:
 
     def get(self):
         return self.stop
+    
+    def reset(self):
+        self.stop = False
 
 @ray.remote
 def _remote_expand_node(search_tree: BaseSearchTree, stop_flag) -> BaseSearchTree:
@@ -64,10 +68,31 @@ def remote_expand_node(search_tree, nid, stop_flag):
     subtree = BaseSearchTree.from_search_tree(root_nid=nid, search_tree=search_tree)
     return _remote_expand_node.remote(subtree, stop_flag)
 
+def downsample_xy(input_path: Path, output_path: Path, n_points: int):
+    """
+    Downsample an XY pattern to n_points between min and max 2θ in the file.
+    Assumes file format: two columns, 2theta and intensity.
+    """
+    # Load pattern
+    data = np.loadtxt(input_path)
+    twotheta = data[:, 0]
+    intensity = data[:, 1]
+
+    # Create new 2theta grid
+    wmin, wmax = twotheta[0], twotheta[-1]
+    new_twotheta = np.linspace(wmin, wmax, n_points)
+
+    # Interpolate intensities onto new grid
+    new_intensity = np.interp(new_twotheta, twotheta, intensity)
+
+    # Save downsized pattern
+    np.savetxt(output_path, np.column_stack([new_twotheta, new_intensity]), fmt="%.6f %.6f")
+    return output_path
 
 def search_phases(
     pattern_path: Path | str,
-    phases: list[Path | str | RefinementPhase],
+    downsized_length: int | None = None,
+    phases: list[Path | str | RefinementPhase] = [],
     pinned_phases: list[Path | str | RefinementPhase] | None = None,
     max_phases: int = 5,
     wavelength: Literal["Cu", "Co", "Cr", "Fe", "Mo"] | float = "Cu",
@@ -121,9 +146,29 @@ def search_phases(
     phase_params = {**DEFAULT_PHASE_PARAMS, **phase_params}
     refinement_params = {**DEFAULT_REFINEMENT_PARAMS, **refinement_params}
 
+    if downsized_length is not None:
+        parent_dir = pattern_path.parent if isinstance(pattern_path, Path) else Path(pattern_path).parent
+        down_size_dir = parent_dir / (parent_dir.stem + "_downsized")
+        os.makedirs(down_size_dir, exist_ok=True)
+        original_pattern_path = pattern_path  # keep the original
+        downsized_pattern_path = down_size_dir / f"{pattern_path.stem}_downsized.xy"
+
+        # Convert to XY
+        if pattern_path.suffix == ".xrdml":
+            xy_path = xrdml2xy(pattern_path, downsized_pattern_path)
+        elif pattern_path.suffix == ".raw":
+            xy_path = raw2xy(pattern_path, downsized_pattern_path)
+        elif pattern_path.suffix == ".rasx":
+            xy_path = rasx2xy(pattern_path, downsized_pattern_path)
+        else:
+            xy_path = pattern_path  # assume already XY
+
+        # Downsample
+        downsized_path = downsample_xy(xy_path, downsized_pattern_path, n_points=downsized_length)
+
     # build the search tree
     search_tree = SearchTree(
-        pattern_path=pattern_path,
+        pattern_path=downsized_path if downsized_length is not None else original_pattern_path,
         cif_paths=phases,
         pinned_phases=pinned_phases,
         refine_params=refinement_params,
@@ -146,29 +191,37 @@ def search_phases(
     to_be_submitted = deque()
 
     while pending:
+        # Wait for at least one worker to finish
         done, pending = ray.wait(pending, timeout=0.5)
+        early_stop_found = False
 
         for task in done:
             remote_search_tree = ray.get(task)
-            remote_search_tree = copy.deepcopy(remote_search_tree)
+            if remote_search_tree is None: continue
+            
+            # Merge the results from the finished worker
             search_tree.add_subtree(
-                anchor_nid=remote_search_tree.root, search_tree=remote_search_tree
+                anchor_nid=remote_search_tree.root, 
+                search_tree=remote_search_tree
             )
+
+            # Look for any node in the returned subtree that has status 'early_stop'
+            if any(node.data.status == "early_stop" for node in remote_search_tree.nodes.values()):
+                early_stop_found = True
+
             for nid in search_tree.get_expandable_children(remote_search_tree.root):
                 to_be_submitted.append(nid)
 
-        # Check flag before even considering the queue
-        if ray.get(stop_flag.get.remote()):
-            print("Early stop detected! Clearing queue and canceling active tasks...")
-            # Clear the queue so no new tasks start
+        # Kill condition: Either the global StopFlag is set OR we just processed the stop node
+        if early_stop_found or ray.get(stop_flag.get.remote()):
+            print("Early stop confirmed. Killing all other workers instantly.")
             to_be_submitted.clear() 
             for task_ref in pending:
                 ray.cancel(task_ref, force=True, recursive=True)
-            
-            # Clear the list so the 'while pending' loop exits
             pending = []
             break
 
+        # Refill the queue
         while len(pending) < max_worker and to_be_submitted:
             nid = to_be_submitted.popleft()
             pending.append(remote_expand_node(search_tree, nid, stop_flag))

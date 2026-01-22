@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import os
 import warnings
 from itertools import zip_longest
 from numbers import Number
@@ -432,9 +434,9 @@ class BaseSearchTree(Tree):
         #print(f'DEBUG isolated_missing_peaks: {isolated_missing_peaks}')
         #print(f'DEBUG isolated_extra_peaks: {isolated_extra_peaks}')
         print(f'DEBUG max_false_peak_intensity: {max_false_peak_intensity}')
-        print(f'DEBUG false_peak_threshold: {self.false_peak_threshold}')
 
-        if max_false_peak_intensity < self.false_peak_threshold:
+        if max_false_peak_intensity < self.false_peak_threshold and \
+            len(isolated_missing_peaks) + len(isolated_extra_peaks) <= 3:
             return True
         return False
 
@@ -448,7 +450,6 @@ class BaseSearchTree(Tree):
         Args:
             nid: the node id
         """
-        stop_refinement = False
         
         node: Node = self.get_node(nid)
         logger.info(
@@ -469,12 +470,15 @@ class BaseSearchTree(Tree):
                 for phase, result in self.all_phases_result.items()
                 if phase not in current_phases_set
             }
-            print(f'DEBUG all phases_result keys = {[phase.path.stem for phase in all_phases_result.keys()]}')
             best_phases, scores, threshold = self.score_phases(
                 all_phases_result, node.data.current_result, self.score_coefficients
             )
-            print(f'DEBUG : best_phases = {best_phases}')
+            
+            for phase, score in scores.items():
+                print(f'DEBUG phase {phase.path.stem} raw score = {scores[phase] if phase in scores else score}')
+
             print(f'DEBUG : threshold = {threshold}')
+            print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
 
             if self.record_peak_matcher_scores:
                 node.data.peak_matcher_scores = scores
@@ -496,7 +500,7 @@ class BaseSearchTree(Tree):
                     grouped_results[phase]["group_id"] = i
 
             for phase, new_result in new_results.items():
-                if stop_refinement:
+                if stop_flag is not None and ray.get(stop_flag.get.remote()):
                     print('DEBUG early stopping activated, break expansion loop')
                     break
 
@@ -545,7 +549,7 @@ class BaseSearchTree(Tree):
                     isolated_extra_peaks = []
 
                 print(f'DEBUG current phases: {[p.path.stem for p in new_phases]}')
-                print(f'DEBUG rwp: {new_result.lst_data.rpb if new_result is not None else None}')            
+                print(f'DEBUG rwp: {new_result.lst_data.rpb if new_result is not None else None}')          
                 
                 if new_result is None:
                     status = "error"
@@ -569,23 +573,48 @@ class BaseSearchTree(Tree):
                     != len(new_phases)
                 ):
                     status = "no_improvement"
+
                 # Removing low weight fraction check for now
                 #elif is_low_weight_fraction:
                 #    status = "low_weight_fraction"
+
                 elif not is_best_result_in_group:
                     status = "similar_structure"
-                elif len(new_phases) >= self.max_phases:
-                    status = "max_depth"
+
                 elif self.early_stopping and \
                         new_result is not None and \
-                        self.converges(isolated_missing_peaks, isolated_extra_peaks, new_result) :
-                    stop_refinement = True
-                    logger.info(
-                        f"Early stopping triggered at node {nid} with phases {[p.path.stem for p in new_phases]}. \n"
+                        self.converges(isolated_missing_peaks, isolated_extra_peaks, new_result):
+                    
+                    logger.info(f"Early stopping triggered at node {nid}...")
+                    
+                    # 1. Create the early stop node
+                    self.create_node(
+                        data=SearchNodeData(
+                            current_result=new_result,
+                            current_phases=new_phases,
+                            status="early_stop",
+                            group_id=group_id,
+                            isolated_extra_peaks=isolated_extra_peaks,
+                            isolated_missing_peaks=isolated_missing_peaks,
+                            fom=fom,
+                            lattice_strain=grouped_results[phase]["lattice_strain"],
+                            early_stop=True
+                        ),
+                        parent=nid,
                     )
-                    status = "early_stop"
+
+                    print('DEBUG early stopping condition met, node created, flag set')
+                    
+                    # Set the global early stop flag
                     if stop_flag is not None:
                         ray.get(stop_flag.set.remote())
+                    
+                    node.data.status = "expanded"
+                    return self.get_expandable_children(nid)
+
+                elif len(new_phases) >= self.max_phases:
+                    status = "max_depth"
+
                 else:
                     status = "pending"
 
@@ -599,7 +628,7 @@ class BaseSearchTree(Tree):
                         isolated_missing_peaks=isolated_missing_peaks,
                         fom=fom,
                         lattice_strain=grouped_results[phase]["lattice_strain"],
-                        early_stop=stop_refinement
+                        early_stop=False
                     ),
                     parent=nid,
                 )
@@ -840,14 +869,10 @@ class BaseSearchTree(Tree):
             )
             raw_scores = {}
 
-        for phase, score in scores.items():
-            print(f'DEBUG phase {phase.path.stem} raw score = {raw_scores[phase] if phase in raw_scores else score}')
-            print(f'DEBUG phase {phase.path.stem} score = {score}')
         peak_matcher_score_threshold, _ = find_optimal_score_threshold(
             list(scores.values())
         )
-        #peak_matcher_score_threshold = max(peak_matcher_score_threshold, 0)
-        print(f'DEBUG peak_matcher_score_threshold = {peak_matcher_score_threshold}')
+        peak_matcher_score_threshold = max(peak_matcher_score_threshold, 0)
 
         filtered_scores = {
             phase: score
@@ -864,8 +889,6 @@ class BaseSearchTree(Tree):
                 reverse=True,
             )
         )
-        print('DEBUG Scores after sorting based on peak counts:')
-        print(filtered_scores)
 
         return (
             filtered_scores,
@@ -1162,7 +1185,9 @@ class SearchTree(BaseSearchTree):
             wavelength=self.wavelength,
             instrument_profile=self.instrument_profile,
             wmin=self.refinement_params.get("wmin", None),
-            wmax=None,
+            wmax=self.refinement_params.get("wmax", None),
+            show_progress=False,
+            nthreads=os.cpu_count(),
         )
         time_end = time.time()
         print(f"DEBUG Peak detection took {time_end - time_start:.2f} seconds.")
@@ -1228,8 +1253,6 @@ class SearchTree(BaseSearchTree):
             pinned_phases=self.pinned_phases,
         )
 
-        print(f'DEBUG all_phases_result key:value pairs: { {phase.path.stem: (result.lst_data.rwp if result is not None else None) for phase, result in all_phases_result.items()} }')
-
         # adjust the initial value of eps1 based on the weighted average of all the phases
         if not isinstance(self.refinement_params.get("eps1", 0), Number):
             weighted_eps1 = 0
@@ -1285,7 +1308,6 @@ class SearchTree(BaseSearchTree):
             )
 
         # adjust the initial value of k1 and b1 for each phase based on the refinement result
-        all_phases_result_updated = {}
         for phase, result in all_phases_result.items():
             if result is not None:
                 k1 = get_number(result.lst_data.phases_results[phase.path.stem].k1)
@@ -1311,7 +1333,6 @@ class SearchTree(BaseSearchTree):
                     + (f"^{b1_upper}" if b1_upper is not None else "")
                 )
 
-            all_phases_result_updated[phase] = result
 
         # clean up cif paths (if no result, remove from list)
         all_phases_result = {

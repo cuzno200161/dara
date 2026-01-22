@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import subprocess
 import tempfile
 import warnings
@@ -88,6 +89,7 @@ class EflechWorker:
             xy_content = trim_pattern(xy_content)
             np.savetxt(pattern_path_temp, xy_content, fmt="%.6f")
 
+            time_start = time.time()
             control_file_path = self.generate_control_file(
                 pattern_path_temp,
                 wavelength=wavelength,
@@ -98,7 +100,10 @@ class EflechWorker:
                 possible_changes=possible_changes,
                 nthreads=nthreads,
             )
+            time_end = time.time()
+            print(f"Control file generation time: {time_end - time_start} seconds")
 
+            time_start = time.time()
             teil_output = self.run_eflech(
                 control_file_path,
                 mode="teil",
@@ -106,6 +111,8 @@ class EflechWorker:
                 show_progress=False,  # we need the output for further processing
                 timeout=timeout,
             )
+            time_end = time.time()
+            print(f"TEIL run time: {time_end - time_start} seconds")
 
             ru = re.search(r"RU=(\d+)", teil_output)
             if ru:
@@ -122,6 +129,7 @@ class EflechWorker:
 
             two_theta_range = xy_content[-1, 0] - xy_content[0, 0]
 
+            time_start = time.time()
             # if teil cannot find a good split of the pattern, we will try to split it manually
             if (
                 not all_wmin2
@@ -135,7 +143,10 @@ class EflechWorker:
                     "teil cannot find a good split of the pattern. Trying to split it with dara-teil."
                 )
                 self.patch_control_file_after_teil(control_file_path, ru, xy_content)
+            time_end = time.time()
+            print(f"Control file patching time: {time_end - time_start} seconds")
 
+            time_start = time.time()
             self.run_eflech(
                 control_file_path,
                 mode="eflech",
@@ -143,6 +154,8 @@ class EflechWorker:
                 show_progress=show_progress,
                 timeout=timeout,
             )
+            time_end = time.time()
+            print(f"EFLECH run time: {time_end - time_start} seconds")
 
             return self.parse_peak_list(temp_dir, wavelength=wavelength)
 

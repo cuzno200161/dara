@@ -348,14 +348,14 @@ class PeakMatcher:
 
         ratio_matched = I_matched / I_phase
         ratio_wrong_intensity = I_wrong_intensity / I_phase
-        ratio_extra = I_extra / I_phase
         ratio_missing = I_missing / I_obs
+        ratio_extra = I_extra / I_phase
 
         score = (
             matched_coeff * ratio_matched
             + wrong_intensity_coeff * ratio_wrong_intensity
-            + extra_coeff * ratio_extra
             + missing_coeff * ratio_missing
+            + extra_coeff * ratio_extra
         )
         
         return score
