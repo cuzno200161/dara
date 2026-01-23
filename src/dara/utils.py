@@ -421,7 +421,7 @@ def find_optimal_score_threshold(
     threshold_1 = score_percentile[np.argmax(second_derivative)].item()
 
     # Second threshold based on 75th percentile
-    threshold_2 = np.percentile(scores, 60)
+    threshold_2 = np.percentile(scores, 75)
     
     threshold = max(threshold_1, threshold_2)
     return threshold, score_percentile

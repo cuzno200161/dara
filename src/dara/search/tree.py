@@ -433,10 +433,11 @@ class BaseSearchTree(Tree):
         #print(f'DEBUG new_result.peak_data: {new_result.peak_data[["2theta", "intensity"]] if new_result is not None else None}')
         #print(f'DEBUG isolated_missing_peaks: {isolated_missing_peaks}')
         #print(f'DEBUG isolated_extra_peaks: {isolated_extra_peaks}')
-        print(f'DEBUG max_false_peak_intensity: {max_false_peak_intensity}')
+        print(f'DEBUG max_false_peak_intensity: {max_false_peak_intensity}, number of false peaks: {len(isolated_missing_peaks) + len(isolated_extra_peaks)}')
 
         if max_false_peak_intensity < self.false_peak_threshold and \
-            len(isolated_missing_peaks) + len(isolated_extra_peaks) <= 3:
+                len(isolated_missing_peaks) + len(isolated_extra_peaks) <= 3 and \
+                new_result.lst_data.rpb < 20.0:
             return True
         return False
 
@@ -453,7 +454,7 @@ class BaseSearchTree(Tree):
         
         node: Node = self.get_node(nid)
         logger.info(
-            f"Expanding node {nid} with current phases {node.data.current_phases}, "
+            f"Expanding node {nid} with current phases {[p.path.stem for p in node.data.current_phases]}, "
             f"Rwp = {node.data.current_result.lst_data.rwp if node.data.current_result is not None else None}"
         )
         if node is None:
@@ -470,12 +471,20 @@ class BaseSearchTree(Tree):
                 for phase, result in self.all_phases_result.items()
                 if phase not in current_phases_set
             }
+            
+            if not all_phases_result:
+                node.data.status = "expanded"
+                return self.get_expandable_children(nid)
+            
             best_phases, scores, threshold = self.score_phases(
                 all_phases_result, node.data.current_result, self.score_coefficients
             )
             
             for phase, score in scores.items():
-                print(f'DEBUG phase {phase.path.stem} raw score = {scores[phase] if phase in scores else score}')
+                print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
+            
+            for phase, score in best_phases.items():
+                print(f'DEBUG phase {phase.path.stem} score = {score}')
 
             print(f'DEBUG : threshold = {threshold}')
             print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
@@ -484,6 +493,7 @@ class BaseSearchTree(Tree):
                 node.data.peak_matcher_scores = scores
                 node.data.peak_matcher_threshold = threshold
 
+            # TODO refinement is done again here. Check for fix
             new_results = self.refine_phases(
                 best_phases, pinned_phases=node.data.current_phases
             )
@@ -1340,6 +1350,9 @@ class SearchTree(BaseSearchTree):
             for phase, result in all_phases_result.items()
             if result is not None
         }
+        
+        for phase, result in all_phases_result.items():
+            print(f'DEBUG after refinement: phase {phase.path.stem} has Rwp = {result.lst_data.rwp}')
 
         logger.info(
             f"Finished refining {len(cif_paths)} phases, "

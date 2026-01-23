@@ -14,6 +14,8 @@ from dara.search.tree import BaseSearchTree, SearchTree
 from dara.xrd import rasx2xy, raw2xy, xrdml2xy
 from pathlib import Path
 
+from scipy.ndimage import gaussian_filter1d
+
 if TYPE_CHECKING:
     from dara.refine import RefinementPhase
     from dara.search.data_model import SearchResult
@@ -68,7 +70,7 @@ def remote_expand_node(search_tree, nid, stop_flag):
     subtree = BaseSearchTree.from_search_tree(root_nid=nid, search_tree=search_tree)
     return _remote_expand_node.remote(subtree, stop_flag)
 
-def downsample_xy(input_path: Path, output_path: Path, n_points: int):
+def downsample_xy(input_path: Path, output_path: Path, n_points: int, sigma: float =1.0):
     """
     Downsample an XY pattern to n_points between min and max 2θ in the file.
     Assumes file format: two columns, 2theta and intensity.
@@ -77,13 +79,15 @@ def downsample_xy(input_path: Path, output_path: Path, n_points: int):
     data = np.loadtxt(input_path)
     twotheta = data[:, 0]
     intensity = data[:, 1]
+    
+    intensity_smooth = gaussian_filter1d(intensity, sigma=sigma)
 
     # Create new 2theta grid
     wmin, wmax = twotheta[0], twotheta[-1]
     new_twotheta = np.linspace(wmin, wmax, n_points)
 
     # Interpolate intensities onto new grid
-    new_intensity = np.interp(new_twotheta, twotheta, intensity)
+    new_intensity = np.interp(new_twotheta, twotheta, intensity_smooth)
 
     # Save downsized pattern
     np.savetxt(output_path, np.column_stack([new_twotheta, new_intensity]), fmt="%.6f %.6f")
@@ -140,7 +144,7 @@ def search_phases(
 
     if not ray.is_initialized():
         num_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", 4))
-        ray.init(num_cpus=num_cpus, _metrics_export_port=None)
+        ray.init(num_cpus=num_cpus, local_mode=True)
         print("DEBUG: Ray resources:", ray.available_resources())
 
     phase_params = {**DEFAULT_PHASE_PARAMS, **phase_params}
@@ -186,6 +190,7 @@ def search_phases(
     )
 
     max_worker = ray.cluster_resources()["CPU"]
+    #max_worker = 1
     stop_flag = StopFlag.remote()
     pending = [remote_expand_node(search_tree, search_tree.root, stop_flag)]
     to_be_submitted = deque()

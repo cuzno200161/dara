@@ -264,6 +264,9 @@ class PeakMatcher:
         """Get the missing peaks in the `observed peaks`. The shape should be (N, 2) with [position, intensity]."""
         missing = self._result["missing"]
         missing = np.array(missing).reshape(-1)
+        
+        print(f'DEBUG missing peak indices:\n {self.peak_obs[missing] if len(missing) > 0 else np.array([]).reshape(-1, 2)}')
+        
         return (
             self.peak_obs[missing] if len(missing) > 0 else np.array([]).reshape(-1, 2)
         )
@@ -273,6 +276,10 @@ class PeakMatcher:
         """Get the matched peaks in both the `calculated peaks` and the `observed peaks`."""
         matched = self._result["matched"]
         matched = np.array(matched).reshape(-1, 2)
+        
+        print(f'DEBUG matched peak calc indices:\n{self.peak_calc[matched[:, 0]] if len(matched) > 0 else np.array([]).reshape(-1, 2)}')
+        print(f'DEBUG matched peak obs indices:\n{self.peak_obs[matched[:, 1]] if len(matched) > 0 else np.array([]).reshape(-1, 2)}')
+        
         return (
             self.peak_calc[matched[:, 0]]
             if len(matched) > 0
@@ -287,6 +294,9 @@ class PeakMatcher:
         """Get the extra peaks in the `calculated peaks`."""
         extra = self._result["extra"]
         extra = np.array(extra).reshape(-1)
+        
+        print(f'DEBUG extra peak indices:\n {self.peak_calc[extra] if len(extra) > 0 else np.array([]).reshape(-1, 2)}')
+        
         return self.peak_calc[extra] if len(extra) > 0 else np.array([]).reshape(-1, 2)
 
     @property
@@ -297,6 +307,9 @@ class PeakMatcher:
         """
         wrong_intens = self._result["wrong_intensity"]
         wrong_intens = np.array(wrong_intens).reshape(-1, 2)
+        
+        print(f'DEBUG wrong intensity peak calc indices:\n{self.peak_calc[wrong_intens[:, 0]] if len(wrong_intens) > 0 else np.array([]).reshape(-1, 2)}')
+        print(f'DEBUG wrong intensity peak obs indices:\n{self.peak_obs[wrong_intens[:, 1]] if len(wrong_intens) > 0 else np.array([]).reshape(-1, 2)}')
 
         return (
             self.peak_calc[np.array(wrong_intens)[:, 0]]
@@ -337,6 +350,11 @@ class PeakMatcher:
         extra_calc = self.extra
         
         eps = 1e-12
+        
+        print(f'DEBUG matched peaks:\n{matched_peaks}')
+        print(f'DEBUG wrong intensity peaks:\n{wrong_intens_peaks}')
+        print(f'DEBUG missing peaks:\n{missing_obs}')
+        print(f'DEBUG extra peaks:\n{extra_calc}')
 
         I_matched = np.sum(np.abs(matched_peaks[:, 1]))
         I_wrong_intensity = np.sum(np.abs(wrong_intens_peaks[:, 1]))
