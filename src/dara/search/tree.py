@@ -22,7 +22,7 @@ from dara.cif2str import CIF2StrError
 from dara.peak_detection import detect_peaks
 from dara.refine import RefinementPhase
 from dara.search.data_model import SearchNodeData, SearchResult
-from dara.search.peak_matcher import PeakMatcher
+from dara.search.peak_matcher import PeakMatcher, DEFAULT_ANGLE_TOLERANCE
 from dara.utils import (
     find_optimal_intensity_threshold,
     find_optimal_score_threshold,
@@ -33,6 +33,7 @@ from dara.utils import (
     parse_refinement_param,
     rpb,
 )
+
 
 if TYPE_CHECKING:
     from dara.result import RefinementResult
@@ -82,6 +83,7 @@ def remote_do_refinement_no_saving(
 def remote_peak_matching(
     batch: list[tuple[np.ndarray, np.ndarray]],
     return_type: Literal["PeakMatcher", "score", "jaccard"],
+    score_coefficients: dict[str, float] | None = None,
 ) -> list[PeakMatcher | float]:
     results = []
 
@@ -91,7 +93,10 @@ def remote_peak_matching(
         if return_type == "PeakMatcher":
             results.append(pm)
         elif return_type == "score":
-            results.append(pm.score())
+            results.append(pm.score(matched_coeff=score_coefficients.get('matched_coeff', 1.0) if score_coefficients else 1.0,
+                                    wrong_intensity_coeff=score_coefficients.get('wrong_intensity_coeff', 0.0) if score_coefficients else 0.0,
+                                    missing_coeff=score_coefficients.get('missing_coeff', 0) if score_coefficients else 0,
+                                    extra_coeff=score_coefficients.get('extra_coeff', 0) if score_coefficients else 0))
         elif return_type == "jaccard":
             results.append(pm.jaccard_index())
         else:
@@ -105,6 +110,7 @@ def batch_peak_matching(
     peak_obs: np.ndarray | list[np.ndarray],
     return_type: Literal["PeakMatcher", "score", "jaccard"] = "PeakMatcher",
     batch_size: int = 100,
+    score_coefficients: dict[str, float] | None = None,
 ) -> list[PeakMatcher | float]:
     if isinstance(peak_obs, np.ndarray):
         peak_obs = [peak_obs] * len(peak_calcs)
@@ -117,7 +123,7 @@ def batch_peak_matching(
         all_data[i : i + batch_size] for i in range(0, len(all_data), batch_size)
     ]
     handles = [
-        remote_peak_matching.remote(batch, return_type=return_type) for batch in batches
+        remote_peak_matching.remote(batch, return_type, score_coefficients) for batch in batches
     ]
     return sum(ray.get(handles), [])
 
@@ -262,6 +268,7 @@ def group_phases(
             ].values
         )
 
+    print('DEBUG calculating pairwise similarity matrix...')
     pairwise_similarity = batch_peak_matching(
         [p for p in peaks for _ in peaks],
         [p for _ in peaks for p in peaks],
@@ -416,6 +423,18 @@ class BaseSearchTree(Tree):
 
         self.all_phases_result = all_phases_result
         self.peak_obs = peak_obs
+        self.angle_tolerance = DEFAULT_ANGLE_TOLERANCE
+
+    def find_duplicate_node(self, phases: list[RefinementPhase]) -> str | None:
+        """
+        Checks if a node with the same combination of phases already exists.
+        Returns the node ID if found, otherwise None.
+        """
+        target_set = set(phases)
+        for node_id, node in self.nodes.items():
+            if node.data and set(node.data.current_phases) == target_set:
+                return node_id
+        return None
 
     def converges(self, isolated_missing_peaks, isolated_extra_peaks, new_result) -> bool:
         """
@@ -464,22 +483,37 @@ class BaseSearchTree(Tree):
 
         node.data.status = "running"
         try:
+            # Get the Parent Node and its result as memory
+            parent_node = self.get_node(nid)
+            parent_result = parent_node.data.current_result
+            
+            # Extract the memory peaks once (if they exist)
+            memory_2thetas = None
+            if parent_result is not None:
+                memory_2thetas = parent_result.peak_data["2theta"].values
+                
             # remove phases that are already in the current result
             current_phases_set = set(node.data.current_phases)
+            print(f'DEBUG current phases set: {[p.path.stem for p in current_phases_set]}')
             all_phases_result = {
                 phase: result
                 for phase, result in self.all_phases_result.items()
                 if phase not in current_phases_set
             }
             
+            print(f'DEBUG all_phases_result: {[p.path.stem for p in all_phases_result.keys()]}')
+            
             if not all_phases_result:
                 node.data.status = "expanded"
                 return self.get_expandable_children(nid)
             
-            best_phases, scores, threshold = self.score_phases(
+            best_phases, scores, raw_scores, threshold = self.score_phases(
                 all_phases_result, node.data.current_result, self.score_coefficients
             )
             
+            for phase, score in raw_scores.items():
+                print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
+                
             for phase, score in scores.items():
                 print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
             
@@ -493,7 +527,33 @@ class BaseSearchTree(Tree):
                 node.data.peak_matcher_scores = scores
                 node.data.peak_matcher_threshold = threshold
 
-            # TODO refinement is done again here. Check for fix
+            # Check for duplicate nodes
+            final_candidates = {}
+            for phase, score in best_phases.items():
+                potential_phases = [*node.data.current_phases, phase]
+                duplicate_id = self.find_duplicate_node(potential_phases)
+                if duplicate_id:
+                    # Create a terminal node marked as duplicate immediately
+                    logger.info(f"Skipping refinement: {[p.path.stem for p in potential_phases]} "
+                                f"already exists at node {duplicate_id}")
+                    self.create_node(
+                        data=SearchNodeData(
+                            current_result=None, # No refinement needed
+                            current_phases=potential_phases,
+                            status="duplicate",
+                            group_id=-1
+                        ),
+                        parent=nid
+                    )
+                else:
+                    # Only refine phases that lead to unique combinations
+                    final_candidates[phase] = score
+
+            # Replace 'best_phases' with 'final_candidates' for the expensive refinement
+            new_results = self.refine_phases(
+                final_candidates, pinned_phases=node.data.current_phases
+)
+
             new_results = self.refine_phases(
                 best_phases, pinned_phases=node.data.current_phases
             )
@@ -554,6 +614,25 @@ class BaseSearchTree(Tree):
                     )
                     isolated_missing_peaks = peak_matcher.get_isolated_peaks(peak_type="missing")
                     isolated_extra_peaks = peak_matcher.get_isolated_peaks(peak_type="extra")
+
+                    if memory_2thetas is not None and len(isolated_extra_peaks) > 0:
+                        validated_extra_peaks = []
+                        
+                        for extra_peak in isolated_extra_peaks:
+                            # Check overlap against Parent's result (The "Memory")
+                            # We use the parent's peaks because we know they are valid/accepted.
+                            overlap_found = np.any(
+                                np.abs(extra_peak[0] - memory_2thetas) < self.angle_tolerance
+                            )
+                            
+                            if overlap_found:
+                                logger.debug(f"Peak at {extra_peak[0]:.2f} classified as 'Overlap' instead of 'Extra'")
+                                continue  # It is an overlap, not a defect. Skip it.
+                            
+                            validated_extra_peaks.append(extra_peak)
+                        
+                        isolated_extra_peaks = np.array(validated_extra_peaks)
+                    
                 else:
                     isolated_missing_peaks = []
                     isolated_extra_peaks = []
@@ -692,6 +771,7 @@ class BaseSearchTree(Tree):
             "max_depth",
             "similar_structure",
             "early_stop",
+            "duplicate",
         }:
             raise ValueError(f"Node with id {node.identifier} is not expanded.")
         if node.data.group_id == -1:
@@ -770,142 +850,98 @@ class BaseSearchTree(Tree):
 
     def score_phases(
         self,
-        all_phases_result: dict[RefinementPhase, RefinementResult],
+        all_phases_result: dict[RefinementPhase, SearchResult],
         current_result: RefinementResult | None = None,
         score_coefficients: dict[str, float] | None = None,
-    ) -> tuple[list[RefinementPhase], dict[RefinementPhase, list[float]], float]:
-        """
-        Get the best matched phases.
-
-        This is a naive search-match method based on the peak matching score. It will return the best matched phases,
-        all phases' scores, and the score's threshold.
-
-        The threshold is determined by finding the inflection point of the percentile of the scores.
-
-        Args:
-            all_phases_result: the result of all the phases
-            current_result: the current result
-            score_coefficients: the coefficients for the score calculation
-
-        Returns
-        -------
-            a tuple containing the best matched phases, all phases' scores, and the score's threshold
-        """
+    ) -> tuple[dict[RefinementPhase, float], dict[RefinementPhase, list[float]], float]:
+        
+        # 1. Setup Residual (What is missing?)
         if current_result is None:
             missing_peaks = self.peak_obs
+            # If no current result (first iteration), there is no 'memory' to check against
+            ref_peaks = None 
         else:
-            current_peak_calc = current_result.peak_data[["2theta", "intensity"]].values
-            missing_peaks = PeakMatcher(current_peak_calc, self.peak_obs).missing
+            res_matcher = PeakMatcher(current_result.peak_data[["2theta", "intensity"]].values, self.peak_obs)
+            missing_peaks = res_matcher.missing
+            # MEMORY SOURCE: The peaks of phases we have already accepted
+            ref_peaks = current_result.peak_data[["2theta", "intensity"]].values
 
-        if len(missing_peaks) == 0:
-            return [], {}, 0
+        if len(missing_peaks) == 0: return {}, {}, 0
 
-        peak_calcs = [
-            refinement_result.peak_data[
-                refinement_result.peak_data["phase"] == phase.path.stem
-            ][["2theta", "intensity"]].values
-            for phase, refinement_result in all_phases_result.items()
-        ]
+        coeffs = score_coefficients or {}
+        I_obs_total = np.sum(np.abs(self.peak_obs[:, 1])) + 1e-12
 
-        peak_counts = {
-            phase: len(
-                refinement_result.peak_data[
-                    refinement_result.peak_data["phase"] == phase.path.stem
-                ]
-            )
-            for phase, refinement_result in all_phases_result.items()
-        }
-
-        if self.record_peak_matcher_scores:
-            peak_matchers = dict(
-                zip_longest(
-                    all_phases_result.keys(),
-                    batch_peak_matching(
-                        peak_calcs, missing_peaks, return_type="PeakMatcher"
-                    ),
-                    fillvalue=None,
-                )
-            )
-            
-            matched_coeff = score_coefficients.get('matched_coeff', 1.0) if score_coefficients else 1.0
-            wrong_intensity_coeff = score_coefficients.get('wrong_intensity_coeff', 0.0) if score_coefficients else 0.0
-            missing_coeff = score_coefficients.get('missing_coeff', 1.0) if score_coefficients else 0.0
-            extra_coeff = score_coefficients.get('extra_coeff', 1.0) if score_coefficients else 0.0
-
-            scores = {
-                k: v.score(matched_coeff=matched_coeff, 
-                           wrong_intensity_coeff=wrong_intensity_coeff, 
-                           missing_coeff=missing_coeff, 
-                           extra_coeff=extra_coeff) if v is not None else 0 for k, v in peak_matchers.items()
-            }
-
-            raw_scores = {}
-
-            for phase, peak_matcher in peak_matchers.items():
-                if peak_matcher is not None:
-                    raw_scores[phase] = [
-                        peak_matcher.score(
-                            matched_coeff=1,
-                            wrong_intensity_coeff=0,
-                            missing_coeff=0,
-                            extra_coeff=0,
-                        ),
-                        peak_matcher.score(
-                            matched_coeff=0,
-                            wrong_intensity_coeff=1,
-                            missing_coeff=0,
-                            extra_coeff=0,
-                        ),
-                        peak_matcher.score(
-                            matched_coeff=0,
-                            wrong_intensity_coeff=0,
-                            missing_coeff=1,
-                            extra_coeff=0,
-                        ),
-                        peak_matcher.score(
-                            matched_coeff=0,
-                            wrong_intensity_coeff=0,
-                            missing_coeff=0,
-                            extra_coeff=1,
-                        ),
-                    ]
-        else:
-            scores = dict(
-                zip_longest(
-                    all_phases_result.keys(),
-                    batch_peak_matching(peak_calcs, missing_peaks, return_type="score"),
-                    fillvalue=0,
-                )
-            )
-            raw_scores = {}
-
-        peak_matcher_score_threshold, _ = find_optimal_score_threshold(
-            list(scores.values())
-        )
-        peak_matcher_score_threshold = max(peak_matcher_score_threshold, 0)
-
-        filtered_scores = {
-            phase: score
-            for phase, score in scores.items()
-            if score >= peak_matcher_score_threshold and score > 0
-        }
-
+        # 2. Batch Match against Residual
+        cands_data = [res.peak_data[res.peak_data["phase"] == p.path.stem][["2theta", "intensity"]].values 
+                      for p, res in all_phases_result.items()]
         
-        # Phases with more peaks are refined first
-        filtered_scores = dict(
-            sorted(
-                filtered_scores.items(),
-                key=lambda item: peak_counts.get(item[0], 0),
-                reverse=True,
+        
+        print('DEBUG score_phases')
+        matchers = dict(zip(all_phases_result.keys(), 
+                            batch_peak_matching(cands_data, missing_peaks, return_type="PeakMatcher")))
+
+        scores, raw_scores = {}, {}
+
+        for phase, m in matchers.items():
+            if m is None: 
+                scores[phase] = 0
+                continue
+
+            # --- A. BASE INTENSITIES ---
+            m_obs, m_calc = m.matched
+            w_obs, w_calc = m.wrong_intensity
+            
+            # Use 'min' rule for conservative matching
+            I_matched = np.sum(np.abs(min([m_obs, m_calc], key=lambda x: x[:, 1].sum())[:, 1])) if len(m_obs) > 0 else 0
+            I_wrong = np.sum(np.abs(min([w_obs, w_calc], key=lambda x: x[:, 1].sum())[:, 1])) if len(w_obs) > 0 else 0
+            I_missing = np.sum(np.abs(m.missing[:, 1]))
+            I_extra = np.sum(np.abs(m.extra[:, 1]))
+            
+            print(f'extra peaks before salvage for phase {phase.path.stem}: {m.extra}')
+
+            # --- B. OVERLAP LOGIC (Replaces Manual Memory) ---
+            # If we have a current result, check if 'Extra' peaks are actually overlapping
+            # with phases we already found.
+            if ref_peaks is not None:
+                print(f'DEBUG ref_peaks: {ref_peaks}')
+                # Match candidate peaks against the Previous Refined Phases
+                m_overlap = PeakMatcher(m.peak_calc, ref_peaks, angle_tolerance=self.angle_tolerance)
+                
+                # We accept overlaps regardless of intensity (matched OR wrong_intensity)
+                # because the refined intensity might have fluctuated.
+                overlap_hits = set(m_overlap.matched_indices_calc) | set(m_overlap.wrong_intensity_indices_calc)
+                extra_indices = set(m.extra_indices_calc)
+                
+                print(f'DEBUG matched_indices_calc: {m_overlap.matched}')
+                print(f'DEBUG wrong_intensity: {m_overlap.wrong_intensity}')
+                print(f'DEBUG extra_indices: {m.extra}')
+                # Intersection: 'Extra' in residual AND 'Exists' in previous phases
+                salvage_indices = list(extra_indices & overlap_hits)
+                
+                
+                if salvage_indices:
+                    I_salvaged = np.sum(np.abs(m.peak_calc[salvage_indices, 1]))
+                    I_matched += I_salvaged
+                    I_extra -= I_salvaged
+                    if I_extra < 0: I_extra = 0
+
+            # --- C. FINAL SCORE ---
+            scores[phase] = m.calculate_intensity_score(
+                I_matched, I_wrong, I_missing, I_extra, I_obs_total, **coeffs
             )
-        )
+            raw_scores[phase] = [float(I_matched), float(I_wrong), float(I_missing), float(I_extra)]
 
-        return (
-            filtered_scores,
-            raw_scores,
-            peak_matcher_score_threshold,
-        )
+        # 3. Thresholding
+        threshold, _ = find_optimal_score_threshold(list(scores.values()))
+        threshold = max(threshold, 0)
+        
+        filtered = {p: s for p, s in scores.items() if s >= threshold and s > 0}
+        sorted_results = dict(sorted(filtered.items(), 
+                                     key=lambda x: len(all_phases_result[x[0]].peak_data), 
+                                     reverse=True))
 
+        return sorted_results, scores, raw_scores, threshold
+    
     def refine_phases(
         self,
         phases: list[RefinementPhase],
@@ -1138,6 +1174,9 @@ class SearchTree(BaseSearchTree):
 
         # Do peak matching first
         all_phases_result = self._get_all_cleaned_phases_result()
+        
+        for phase, result in all_phases_result.items():
+            print(f'DEBUG phase {phase.path.stem} initial refinement Rwp = {result.lst_data.rwp if result is not None else None}')
 
         if self.express_mode:
             logger.info("Express mode is enabled. Grouping phases before starting.")
@@ -1230,7 +1269,7 @@ class SearchTree(BaseSearchTree):
                 + (f"^{upper}" if upper is not None else "")
             )
             logger.info(
-                f"The initial value of b1 is automatically set to {self.refinement_params['b1']}."
+                f"The initial value of b1 is automatically set to {self.phase_params['b1']}."
             )
 
         return peak_list
@@ -1342,7 +1381,6 @@ class SearchTree(BaseSearchTree):
                     + (f"_{b1_lower}" if b1_lower is not None else "")
                     + (f"^{b1_upper}" if b1_upper is not None else "")
                 )
-
 
         # clean up cif paths (if no result, remove from list)
         all_phases_result = {

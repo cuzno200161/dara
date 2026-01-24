@@ -3,7 +3,7 @@ from typing import Any, Literal
 import numpy as np
 from scipy.spatial.distance import cdist
 
-DEFAULT_ANGLE_TOLERANCE = 0.2  # maximum difference in angle
+DEFAULT_ANGLE_TOLERANCE = 0.5  # maximum difference in angle
 DEFAULT_INTENSITY_TOLERANCE = 2  # maximum ratio of the intensities
 # maximum ratio of the intensities to be considered as missing instead of wrong intensity
 DEFAULT_MAX_INTENSITY_TOLERANCE = 5
@@ -69,7 +69,7 @@ def find_best_match(
         peak_obs: the observed peaks, (m, 2) array of peaks with [position, intensity]
         angle_tolerance: the maximum difference in angle
         intensity_tolerance: the maximum ratio of the intensities
-        max_intensity_tolerance: the maximum ratio of the intensities to be considered as
+        max_intensity_tolerance: the maximum ratio of the intensities to be considered as missing instead of wrong intensity
 
     Returns
     -------
@@ -110,6 +110,7 @@ def find_best_match(
 
     residual_peak_obs = peak_obs.copy()
 
+    # The for loop handles matched peaks and substract them original peaks
     for peak_idx in np.argsort(peak_calc[:, 1])[::-1]:  # sort by intensity
         peak = peak_calc[peak_idx]
 
@@ -130,9 +131,13 @@ def find_best_match(
 
         matched.append((peak_idx, best_match_idx))
         residual_peak_obs[best_match_idx, 1] -= peak[1]
+        
+    print(f'DEBUG residual_peak_obs after matching: {residual_peak_obs}')
+    print(f'DEBUG temporary matched peaks: {matched}')
 
     all_assigned = {m[1] for m in matched}
     missing = [i for i in range(len(peak_obs)) if i not in all_assigned]
+    print(f'DEBUG intermediate missing peaks: {missing}')
 
     # tell if a peak has wrong intensity by the sum of the intensities of the matched peaks
     to_be_deleted = set()
@@ -149,8 +154,15 @@ def find_best_match(
         elif peak_intensity_diff > np.log(intensity_tolerance):
             wrong_intens.append(matched[i])
             to_be_deleted.add(i)
+            
+    print(f'DEBUG to_be_deleted indices: {to_be_deleted}')
+            
+    print(f'DEBUG final missing peaks: {missing}')
+    print(f'DEBUG final extra peaks: {extra}')
+    print(f'DEBUG final wrong intensity peaks: {wrong_intens}')
 
     matched = [m for i, m in enumerate(matched) if i not in to_be_deleted]
+    print(f'DEBUG final matched peaks: {matched}')
 
     return {
         "missing": missing,
@@ -225,7 +237,7 @@ class PeakMatcher:
         self,
         peak_calc: np.ndarray,
         peak_obs: np.ndarray,
-        intensity_resolution: float = 0.01,
+        intensity_resolution: float = 0.005,
         angle_resolution: float = 0.1,
         angle_tolerance: float = DEFAULT_ANGLE_TOLERANCE,
         intensity_tolerance: float = DEFAULT_INTENSITY_TOLERANCE,
@@ -250,6 +262,9 @@ class PeakMatcher:
         ]
 
         self.peak_obs = merge_peaks(peak_obs, resolution=angle_resolution)
+        
+        print(f'DEBUG peak_obs after merging: {self.peak_obs}')
+        print(f'DEBUG peak_calc after merging: {self.peak_calc}')
 
         self._result = find_best_match(
             self.peak_calc,
@@ -265,7 +280,6 @@ class PeakMatcher:
         missing = self._result["missing"]
         missing = np.array(missing).reshape(-1)
         
-        print(f'DEBUG missing peak indices:\n {self.peak_obs[missing] if len(missing) > 0 else np.array([]).reshape(-1, 2)}')
         
         return (
             self.peak_obs[missing] if len(missing) > 0 else np.array([]).reshape(-1, 2)
@@ -277,8 +291,6 @@ class PeakMatcher:
         matched = self._result["matched"]
         matched = np.array(matched).reshape(-1, 2)
         
-        print(f'DEBUG matched peak calc indices:\n{self.peak_calc[matched[:, 0]] if len(matched) > 0 else np.array([]).reshape(-1, 2)}')
-        print(f'DEBUG matched peak obs indices:\n{self.peak_obs[matched[:, 1]] if len(matched) > 0 else np.array([]).reshape(-1, 2)}')
         
         return (
             self.peak_calc[matched[:, 0]]
@@ -295,7 +307,6 @@ class PeakMatcher:
         extra = self._result["extra"]
         extra = np.array(extra).reshape(-1)
         
-        print(f'DEBUG extra peak indices:\n {self.peak_calc[extra] if len(extra) > 0 else np.array([]).reshape(-1, 2)}')
         
         return self.peak_calc[extra] if len(extra) > 0 else np.array([]).reshape(-1, 2)
 
@@ -308,8 +319,6 @@ class PeakMatcher:
         wrong_intens = self._result["wrong_intensity"]
         wrong_intens = np.array(wrong_intens).reshape(-1, 2)
         
-        print(f'DEBUG wrong intensity peak calc indices:\n{self.peak_calc[wrong_intens[:, 0]] if len(wrong_intens) > 0 else np.array([]).reshape(-1, 2)}')
-        print(f'DEBUG wrong intensity peak obs indices:\n{self.peak_obs[wrong_intens[:, 1]] if len(wrong_intens) > 0 else np.array([]).reshape(-1, 2)}')
 
         return (
             self.peak_calc[np.array(wrong_intens)[:, 0]]
@@ -320,6 +329,55 @@ class PeakMatcher:
             else np.array([]).reshape(-1, 2),
         )
 
+    @property
+    def matched_indices_calc(self) -> list[int]:
+        """Indices of calculated peaks that were matched."""
+        return [m[0] for m in self._result["matched"]]
+    
+    @property
+    def wrong_intensity_indices_calc(self) -> list[int]:
+        """Indices of calculated peaks that had wrong intensity."""
+        return [m[0] for m in self._result["wrong_intensity"]]
+    
+    @property
+    def extra_indices_calc(self) -> list[int]:
+        """Indices of calculated peaks that were extra."""
+        return self._result["extra"]
+
+    def calculate_intensity_score(
+        self,
+        I_matched: float,
+        I_wrong_intensity: float,
+        I_missing: float,
+        I_extra: float,
+        I_obs_total: float,
+        matched_coeff: float = 1,
+        wrong_intensity_coeff: float = 0,
+        missing_coeff: float = 0,
+        extra_coeff: float = 0,
+    ) -> float:
+        """
+        Calculating score based on intensities.
+        """
+        eps = 1e-12
+        
+        # 1. Calculate Phase Intensity (Total signal explained by this phase + errors)
+        I_phase = I_matched + I_wrong_intensity + I_extra + eps
+        
+        # 2. Calculate Ratios
+        ratio_matched = I_matched / I_phase
+        ratio_wrong_intensity = I_wrong_intensity / I_phase
+        ratio_missing = I_missing / I_obs_total
+        ratio_extra = I_extra / I_phase
+
+        # 3. Weighted Sum
+        return (
+            matched_coeff * ratio_matched
+            + wrong_intensity_coeff * ratio_wrong_intensity
+            + missing_coeff * ratio_missing
+            + extra_coeff * ratio_extra
+        )
+
     def score(
         self,
         matched_coeff: float = 1,
@@ -328,56 +386,28 @@ class PeakMatcher:
         extra_coeff: float = 0,
     ) -> float:
         """
-        Calculate the score of the matching result.
-
-        Args:
-            matched_coeff: the coefficient of the matched peaks
-            wrong_intensity_coeff: the coefficient of the peaks with wrong intensities
-            missing_coeff: the coefficient of the missing peaks
-            extra_coeff: the coefficient of the extra peaks
-
-        Returns
-        -------
-            the score of the matching result
+        Wrapper: Extracts intensities from self and calls the engine.
         """
+        # Extract existing match data
         matched_obs, matched_calc = self.matched
         wrong_intens_obs, wrong_intens_calc = self.wrong_intensity
-        matched_peaks = min([matched_obs, matched_calc], key=lambda x: x[:, 1].sum())
-        wrong_intens_peaks = min(
-            [wrong_intens_obs, wrong_intens_calc], key=lambda x: x[:, 1].sum()
-        )
-        missing_obs = self.missing
-        extra_calc = self.extra
         
-        eps = 1e-12
+        matched_peaks = min([matched_obs, matched_calc], key=lambda x: x[:, 1].sum()) if len(matched_obs) > 0 else np.empty((0, 2))
+        wrong_intens_peaks = min([wrong_intens_obs, wrong_intens_calc], key=lambda x: x[:, 1].sum()) if len(wrong_intens_obs) > 0 else np.empty((0, 2))
         
-        print(f'DEBUG matched peaks:\n{matched_peaks}')
-        print(f'DEBUG wrong intensity peaks:\n{wrong_intens_peaks}')
-        print(f'DEBUG missing peaks:\n{missing_obs}')
-        print(f'DEBUG extra peaks:\n{extra_calc}')
-
+        # Sum intensities
         I_matched = np.sum(np.abs(matched_peaks[:, 1]))
-        I_wrong_intensity = np.sum(np.abs(wrong_intens_peaks[:, 1]))
-        I_missing = np.sum(np.abs(missing_obs[:, 1]))
-        I_extra = np.sum(np.abs(extra_calc[:, 1]))
-        
-        I_obs = np.sum(np.abs(self.peak_obs[:, 1]))  + eps 
-        I_phase = I_matched + I_wrong_intensity + I_extra
+        I_wrong = np.sum(np.abs(wrong_intens_peaks[:, 1]))
+        I_missing = np.sum(np.abs(self.missing[:, 1]))
+        I_extra = np.sum(np.abs(self.extra[:, 1]))
+        I_obs_total = np.sum(np.abs(self.peak_obs[:, 1])) + 1e-12
 
-        ratio_matched = I_matched / I_phase
-        ratio_wrong_intensity = I_wrong_intensity / I_phase
-        ratio_missing = I_missing / I_obs
-        ratio_extra = I_extra / I_phase
-
-        score = (
-            matched_coeff * ratio_matched
-            + wrong_intensity_coeff * ratio_wrong_intensity
-            + missing_coeff * ratio_missing
-            + extra_coeff * ratio_extra
+        # Delegate to the engine
+        return self.calculate_intensity_score(
+            I_matched, I_wrong, I_missing, I_extra, I_obs_total,
+            matched_coeff, wrong_intensity_coeff, missing_coeff, extra_coeff
         )
         
-        return score
-
     def jaccard_index(self) -> float:
         """
         Calculate the Jaccard index of the matching result.
@@ -411,7 +441,7 @@ class PeakMatcher:
         self,
         peak_type: Literal["missing", "extra"],
         min_angle_difference: float = 0.3,
-        min_intensity_ratio: float = 0.03,
+        min_intensity_ratio: float = 0.005,
     ) -> np.ndarray:
         """
         Get the isolated missing peaks in the `observed peaks`.
@@ -422,7 +452,7 @@ class PeakMatcher:
         Args:
             peak_type: the type of the peaks to consider, either "missing" or "extra"
             min_angle_difference: the tolerance to consider a peak as close to another peak, default to 0.3 degree
-            min_intensity_ratio: the minimum ratio of the intensity to be considered as a peak, default to 0.01
+            min_intensity_ratio: the minimum ratio of the intensity to be considered as a peak, default to 0.005
 
         Returns
         -------
