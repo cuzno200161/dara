@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 from collections import deque
+import time
 from traceback import print_exc
 from turtle import done
 from typing import TYPE_CHECKING, Literal
@@ -174,10 +175,11 @@ def search_phases(
 
     if downsized_length is not None:
         parent_dir = pattern_path.parent if isinstance(pattern_path, Path) else Path(pattern_path).parent
-        down_size_dir = parent_dir / (parent_dir.stem + "_downsized")
+        time_suffix = str(int(time.time() * 1000))
+        down_size_dir = parent_dir / (parent_dir.stem + "_downsized_")
         os.makedirs(down_size_dir, exist_ok=True)
         original_pattern_path = pattern_path  # keep the original
-        downsized_pattern_path = down_size_dir / f"{pattern_path.stem}_downsized.xy"
+        downsized_pattern_path = down_size_dir / f"{pattern_path.stem}_downsized_{time_suffix}.xy"
 
         # Convert to XY
         if pattern_path.suffix == ".xrdml":
