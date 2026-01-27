@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Union
 
+import jenkspy
 import numpy as np
 from monty.json import MontyDecoder
 from pymatgen.core import Composition, Structure
@@ -410,21 +411,44 @@ def find_optimal_score_threshold(
     scores: list[float] | np.ndarray,
 ) -> tuple[float, np.ndarray]:
     """Find the inflection point from a list of scores. We will calculate the percentile first."""
+
     if len(scores) == 0:
         return 0.0, np.array([]).reshape(-1)
 
+    # 1. Sort Descending
     scores = np.array(scores)
-    score_percentile = np.percentile(scores, np.arange(0, 101))
-    score_percentile = signal.savgol_filter(score_percentile, 5, 1)
-
-    second_derivative = np.diff(score_percentile, n=2)
-    threshold_1 = score_percentile[np.argmax(second_derivative)].item()
-
-    # Second threshold based on 75th percentile
-    threshold_2 = np.percentile(scores, 75)
+    sorted_scores = np.sort(scores)[::-1]
     
-    threshold = max(threshold_1, threshold_2)
-    return threshold, score_percentile
+    # 2. Safety: If everything is garbage (e.g., < 0.2), just return max to filter strictly
+    # or return a low baseline. Here we set a hard floor.
+    if np.max(sorted_scores) < 0.2:
+        return np.max(sorted_scores), sorted_scores
+
+    # 3. Calculate drops (difference between adjacent scores)
+    # specific logic: finding the gap between i and i+1
+    drops = sorted_scores[:-1] - sorted_scores[1:]
+    
+    # 4. Find the largest drop, but constrain the search area
+    # Filter indices where the score is at least sensible (e.g. > 0.2)
+    valid_drop_indices = np.where(sorted_scores[:-1] > 0.2)[0]
+    
+    if len(valid_drop_indices) > 0:
+        # Find index of max drop among valid high scores
+        # We assume the 'cliff' is the transition from Signal to Noise.
+        best_drop_idx = valid_drop_indices[np.argmax(drops[valid_drop_indices])]
+        
+        threshold = sorted_scores[best_drop_idx]
+        
+        # Edge Case: Smooth curve (no drop > 0.1), max drop is small.
+        # In this case, fallback to a generous percentile (e.g. median).
+        if drops[best_drop_idx] < 0.15: # 15% drop requirement
+             threshold = np.percentile(sorted_scores, 50)
+             
+    else:
+        # Fallback if no valid high scores exist
+        threshold = np.max(sorted_scores)
+
+    return float(threshold), sorted_scores
 
 
 def find_optimal_intensity_threshold(

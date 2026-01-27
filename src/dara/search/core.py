@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 from collections import deque
 from traceback import print_exc
+from turtle import done
 from typing import TYPE_CHECKING, Literal
 
 import ray
@@ -45,14 +46,31 @@ class StopFlag:
         self.stop = False
 
 @ray.remote
-def _remote_expand_node(search_tree: BaseSearchTree, stop_flag) -> BaseSearchTree:
+class PhaseCombinationRegistry:
+    def __init__(self):
+        self.registered_combinations = set()
+
+    def try_reserve(self, phase_names: list[str]) -> bool:
+        """
+        Returns True if the combination is new and successfully reserved.
+        Returns False if it has already been processed or is currently running.
+        """
+        combo = frozenset(phase_names)
+        if combo in self.registered_combinations:
+            return False
+        
+        self.registered_combinations.add(combo)
+        return True
+
+@ray.remote
+def _remote_expand_node(search_tree: BaseSearchTree, stop_flag, registry) -> BaseSearchTree:
     try:
         # Check if we should even start
         if ray.get(stop_flag.get.remote()):
             return search_tree
 
         # Pass the stop_flag into the expansion logic
-        search_tree.expand_root(stop_flag=stop_flag) 
+        search_tree.expand_root(stop_flag, registry) 
         return search_tree
     except ray.exceptions.TaskCancelledError:
         print("Task was cancelled remotely. Returning current state.")
@@ -62,13 +80,13 @@ def _remote_expand_node(search_tree: BaseSearchTree, stop_flag) -> BaseSearchTre
         raise e
 
 
-def remote_expand_node(search_tree, nid, stop_flag):
+def remote_expand_node(search_tree, nid, stop_flag, registry):
     # Check shared stop flag
     if ray.get(stop_flag.get.remote()):
         return None  # skip expansion
 
     subtree = BaseSearchTree.from_search_tree(root_nid=nid, search_tree=search_tree)
-    return _remote_expand_node.remote(subtree, stop_flag)
+    return _remote_expand_node.remote(subtree, stop_flag, registry)
 
 def downsample_xy(input_path: Path, output_path: Path, n_points: int, sigma: float =1.0):
     """
@@ -110,6 +128,7 @@ def search_phases(
     score_coefficients: dict[str, float] | None = None,
     false_peak_threshold: float = 0.05,
     rpb_threshold: float = 2,
+    strain_threshold: float = 0.02,
     early_stopping: bool = False,
 ) -> list[SearchResult] | SearchTree:
     """
@@ -133,7 +152,9 @@ def search_phases(
         record_peak_matcher_scores: whether to record the peak matcher scores. This is mainly used for
             debugging purposes.
         score_coefficients: the coefficients for the peak match score calculation    
-        rpb_threshold: the RPB threshold
+        false_peak_threshold: the false peak threshold
+        rpb_threshold: the RWP threshold
+        strain_threshold: the strain threshold
         early_stopping: whether to enable early stopping
     """
     if phase_params is None:
@@ -185,6 +206,7 @@ def search_phases(
         max_phases=max_phases,
         rpb_threshold=rpb_threshold,
         false_peak_threshold=false_peak_threshold,
+        strain_threshold=strain_threshold,
         record_peak_matcher_scores=record_peak_matcher_scores,
         score_coefficients=score_coefficients,
         early_stopping=early_stopping,
@@ -193,44 +215,102 @@ def search_phases(
     max_worker = ray.cluster_resources()["CPU"]
     #max_worker = 1
     stop_flag = StopFlag.remote()
-    pending = [remote_expand_node(search_tree, search_tree.root, stop_flag)]
+    registry = PhaseCombinationRegistry.remote()
+    pending = [remote_expand_node(search_tree, search_tree.root, stop_flag, registry)]
     to_be_submitted = deque()
 
     while pending:
-        # Wait for at least one worker to finish
-        done, pending = ray.wait(pending, timeout=0.5)
+        # Standard loop: Check for finished tasks with a short timeout
+        done, pending = ray.wait(pending, timeout=0.1)
         early_stop_found = False
 
+        # 1. Process any tasks that are already done
         for task in done:
-            remote_search_tree = ray.get(task)
-            if remote_search_tree is None: continue
-            
-            # Merge the results from the finished worker
-            search_tree.add_subtree(
-                anchor_nid=remote_search_tree.root, 
-                search_tree=remote_search_tree
-            )
+            try:
+                remote_search_tree = ray.get(task)
+                if remote_search_tree is None: continue
+                
+                # --- NEW: RACE CONDITION GATEKEEPER ---
+                # Check if the new nodes collide with the Master Tree
+                for nid in list(remote_search_tree.nodes.keys()):
+                    if nid == remote_search_tree.root: continue # Skip the anchor
+                    
+                    node = remote_search_tree.get_node(nid)
+                    
+                    # Check against the MASTER tree (the source of truth)
+                    # We assume find_duplicate_node returns the ID of an existing node with same phases
+                    duplicate_id = search_tree.find_duplicate_node(node.data.current_phases)
+                    
+                    if duplicate_id:
+                        # We found a collision that the worker missed!
+                        # Mark this new node as 'duplicate' so it is NOT added to the queue
+                        print(f"Race condition caught: {nid} is a duplicate of {duplicate_id}. Pruning.")
+                        node.data.status = "duplicate"
+                
+                search_tree.add_subtree(anchor_nid=remote_search_tree.root, search_tree=remote_search_tree)
+                
+                # Check if this is the winner
+                if any(node.data.status == "early_stop" for node in remote_search_tree.nodes.values()):
+                    early_stop_found = True
+                
+                # Normal expansion (only if we aren't stopping yet)
+                if not early_stop_found:
+                    for nid in search_tree.get_expandable_children(remote_search_tree.root):
+                        # Double check to ensure we don't queue duplicates
+                        if search_tree.get_node(nid).data.status == "duplicate":
+                            continue
+                        to_be_submitted.append(nid)
 
-            # Look for any node in the returned subtree that has status 'early_stop'
-            if any(node.data.status == "early_stop" for node in remote_search_tree.nodes.values()):
-                early_stop_found = True
+            except ray.exceptions.TaskCancelledError:
+                continue
 
-            for nid in search_tree.get_expandable_children(remote_search_tree.root):
-                to_be_submitted.append(nid)
-
-        # Kill condition: Either the global StopFlag is set OR we just processed the stop node
-        if early_stop_found or ray.get(stop_flag.get.remote()):
-            print("Early stop confirmed. Killing all other workers instantly.")
-            to_be_submitted.clear() 
+        # 2. Check the Kill Conditions
+        
+        # Condition A: We have the result in hand.
+        if early_stop_found:
+            print("Refinement result: Early stop found. Terminating all other workers.")
+            to_be_submitted.clear()
             for task_ref in pending:
                 ray.cancel(task_ref, force=True, recursive=True)
             pending = []
             break
 
-        # Refill the queue
+        # Condition B: The global flag is set (Winner finished but is floating in 'pending').
+        if ray.get(stop_flag.get.remote()):
+            print("Stop flag detected. Retrieving winning result...")
+            to_be_submitted.clear() # Stop new work
+            
+            # HUNT MODE: Blocking wait until we find the winner.
+            # We assume the winner is fast/finished, so this loop will exit almost instantly.
+            while pending:
+                # Wait for the NEXT task to finish (blocking, but fast if winner is ready)
+                done_drain, pending = ray.wait(pending, num_returns=1)
+                
+                for task in done_drain:
+                    try:
+                        remote_search_tree = ray.get(task)
+                        if remote_search_tree:
+                            search_tree.add_subtree(anchor_nid=remote_search_tree.root, search_tree=remote_search_tree)
+                            if any(node.data.status == "early_stop" for node in remote_search_tree.nodes.values()):
+                                early_stop_found = True
+                    except Exception:
+                        pass
+                
+                # Found it! Kill everyone else immediately.
+                if early_stop_found:
+                    print("Winner retrieved. Killing remaining tasks.")
+                    for task_ref in pending:
+                        ray.cancel(task_ref, force=True, recursive=True)
+                    pending = []
+                    break
+            
+            # Break the outer main loop
+            break
+
+        # 3. Refill the queue (Normal operation)
         while len(pending) < max_worker and to_be_submitted:
             nid = to_be_submitted.popleft()
-            pending.append(remote_expand_node(search_tree, nid, stop_flag))
+            pending.append(remote_expand_node(search_tree, nid, stop_flag, registry))
 
     if not return_search_tree:
         return search_tree.get_search_results()

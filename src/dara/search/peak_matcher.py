@@ -3,7 +3,7 @@ from typing import Any, Literal
 import numpy as np
 from scipy.spatial.distance import cdist
 
-DEFAULT_ANGLE_TOLERANCE = 0.5  # maximum difference in angle
+DEFAULT_ANGLE_TOLERANCE = 0.3  # maximum difference in angle
 DEFAULT_INTENSITY_TOLERANCE = 2  # maximum ratio of the intensities
 # maximum ratio of the intensities to be considered as missing instead of wrong intensity
 DEFAULT_MAX_INTENSITY_TOLERANCE = 5
@@ -109,6 +109,7 @@ def find_best_match(
         }
 
     residual_peak_obs = peak_obs.copy()
+    #print(f'DEBUG original peak_obs: {peak_obs}')
 
     # The for loop handles matched peaks and substract them original peaks
     for peak_idx in np.argsort(peak_calc[:, 1])[::-1]:  # sort by intensity
@@ -132,12 +133,12 @@ def find_best_match(
         matched.append((peak_idx, best_match_idx))
         residual_peak_obs[best_match_idx, 1] -= peak[1]
         
-    print(f'DEBUG residual_peak_obs after matching: {residual_peak_obs}')
-    print(f'DEBUG temporary matched peaks: {matched}')
+    #print(f'DEBUG residual_peak_obs after matching: {residual_peak_obs}')
+    #print(f'DEBUG temporary matched peaks: {matched}')
 
     all_assigned = {m[1] for m in matched}
     missing = [i for i in range(len(peak_obs)) if i not in all_assigned]
-    print(f'DEBUG intermediate missing peaks: {missing}')
+    #print(f'DEBUG intermediate missing peaks: {missing}')
 
     # tell if a peak has wrong intensity by the sum of the intensities of the matched peaks
     to_be_deleted = set()
@@ -147,22 +148,18 @@ def find_best_match(
             peak_obs[peak_idx][1],
             peak_obs[peak_idx][1] - residual_peak_obs[peak_idx][1],
         )
-        if peak_intensity_diff > np.log(max_intensity_tolerance):
-            missing.append(peak_idx)
-            extra.append(matched[i][0])
-            to_be_deleted.add(i)
-        elif peak_intensity_diff > np.log(intensity_tolerance):
+        if peak_intensity_diff > np.log(intensity_tolerance):
             wrong_intens.append(matched[i])
             to_be_deleted.add(i)
             
-    print(f'DEBUG to_be_deleted indices: {to_be_deleted}')
+    #print(f'DEBUG to_be_deleted indices: {to_be_deleted}')
             
-    print(f'DEBUG final missing peaks: {missing}')
-    print(f'DEBUG final extra peaks: {extra}')
-    print(f'DEBUG final wrong intensity peaks: {wrong_intens}')
+    #print(f'DEBUG final missing peaks: {missing}')
+    #print(f'DEBUG final extra peaks: {extra}')
+    #print(f'DEBUG final wrong intensity peaks: {wrong_intens}')
 
     matched = [m for i, m in enumerate(matched) if i not in to_be_deleted]
-    print(f'DEBUG final matched peaks: {matched}')
+    #print(f'DEBUG final matched peaks: {matched}')
 
     return {
         "missing": missing,
@@ -263,8 +260,8 @@ class PeakMatcher:
 
         self.peak_obs = merge_peaks(peak_obs, resolution=angle_resolution)
         
-        print(f'DEBUG peak_obs after merging: {self.peak_obs}')
-        print(f'DEBUG peak_calc after merging: {self.peak_calc}')
+        #print(f'DEBUG peak_obs after merging: {self.peak_obs}')
+        #print(f'DEBUG peak_calc after merging: {self.peak_calc}')
 
         self._result = find_best_match(
             self.peak_calc,
