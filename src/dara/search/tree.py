@@ -653,18 +653,7 @@ class BaseSearchTree(Tree):
                 if new_result is None:
                     status = "error"
 
-                # If the new result is worse than the current result from Rpb perspective
-                elif node.data.current_result is not None and \
-                    (node.data.current_result.lst_data.rpb - new_result.lst_data.rpb < self.rpb_threshold):
-                    status = "no_improvement"
-                    
-                # Overfitting can lead to extra peaks 
-                elif len(isolated_extra_peaks) - len(parent_isolated_extra_peaks) >= 3:
-                    status = "extra_peaks"
-            
-                elif abs(grouped_results[phase]["lattice_strain"]) > self.strain_threshold:
-                    status = "high_strain"
-                
+                # TODO if overfitting is detected for the 2nd layer node, then it might be worth it to permanantly remove the parent node
                 # If removing one phase does not improve the result, this indicats overfitting
                 elif (len(remove_unnecessary_phases(
                             new_result,
@@ -692,10 +681,23 @@ class BaseSearchTree(Tree):
                     # When overfitting happens, it denotes that the new pahses explains pattern better than previous ones
                     # Thus, previous phases are no longer needed, we can stop expanding this branch
                     break
+                    
+                # Overfitting can lead to extra peaks 
+                elif len(isolated_extra_peaks) - len(parent_isolated_extra_peaks) >= 3:
+                    status = "extra_peaks"
+            
+                elif abs(grouped_results[phase]["lattice_strain"]) > self.strain_threshold:
+                    status = "high_strain"
 
                 # Removing low weight fraction check for now
                 #elif is_low_weight_fraction:
                 #    status = "low_weight_fraction"
+
+                # If the new result is worse than the current result from Rpb perspective
+                # This is down here because only after qualification check would RPB increase be meaningful
+                elif node.data.current_result is not None and \
+                    (node.data.current_result.lst_data.rpb - new_result.lst_data.rpb < self.rpb_threshold):
+                    status = "no_improvement"
 
                 elif not is_best_result_in_group:
                     status = "similar_structure"

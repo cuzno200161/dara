@@ -148,9 +148,17 @@ def find_best_match(
             peak_obs[peak_idx][1],
             peak_obs[peak_idx][1] - residual_peak_obs[peak_idx][1],
         )
+
+        # Detecting wrong intensity peaks
         if peak_intensity_diff > np.log(intensity_tolerance):
             wrong_intens.append(matched[i])
             to_be_deleted.add(i)
+
+        # Detecting missing peaks
+        if -peak_intensity_diff > np.log(max_intensity_tolerance):
+            missing.append(peak_idx)
+            to_be_deleted.add(i)
+        
             
     #print(f'DEBUG to_be_deleted indices: {to_be_deleted}')
             
