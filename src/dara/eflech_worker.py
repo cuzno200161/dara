@@ -101,7 +101,7 @@ class EflechWorker:
                 nthreads=nthreads,
             )
             time_end = time.time()
-            print(f"Control file generation time: {time_end - time_start} seconds")
+            #print(f"Control file generation time: {time_end - time_start} seconds")
 
             time_start = time.time()
             teil_output = self.run_eflech(
@@ -112,7 +112,7 @@ class EflechWorker:
                 timeout=timeout,
             )
             time_end = time.time()
-            print(f"TEIL run time: {time_end - time_start} seconds")
+            #print(f"TEIL run time: {time_end - time_start} seconds")
 
             ru = re.search(r"RU=(\d+)", teil_output)
             if ru:
@@ -144,7 +144,7 @@ class EflechWorker:
                 )
                 self.patch_control_file_after_teil(control_file_path, ru, xy_content)
             time_end = time.time()
-            print(f"Control file patching time: {time_end - time_start} seconds")
+            #print(f"Control file patching time: {time_end - time_start} seconds")
 
             time_start = time.time()
             self.run_eflech(
