@@ -109,8 +109,6 @@ def find_best_match(
         }
 
     residual_peak_obs = peak_obs.copy()
-    #print(f'DEBUG original peak_obs: {peak_obs}')
-
     # The for loop handles matched peaks and substract them original peaks
     for peak_idx in np.argsort(peak_calc[:, 1])[::-1]:  # sort by intensity
         peak = peak_calc[peak_idx]
@@ -138,7 +136,7 @@ def find_best_match(
 
     all_assigned = {m[1] for m in matched}
     missing = [i for i in range(len(peak_obs)) if i not in all_assigned]
-    #print(f'DEBUG intermediate missing peaks: {missing}')
+    #print(f'DEBUG intermediate missing peaks: {peak_obs[missing] if len(missing) > 0 else np.array([]).reshape(-1, 2)}')
 
     # tell if a peak has wrong intensity by the sum of the intensities of the matched peaks
     to_be_deleted = set()
@@ -157,13 +155,13 @@ def find_best_match(
         # Detecting missing peaks
         if -peak_intensity_diff > np.log(max_intensity_tolerance):
             missing.append(peak_idx)
+            #print(f'DEBUG adding to missing due to large negative intensity diff: {peak_obs[peak_idx]}')
             to_be_deleted.add(i)
-        
+
+        #print(f'DEBUG to_be_deleted indices: {to_be_deleted}')
             
-    #print(f'DEBUG to_be_deleted indices: {to_be_deleted}')
-            
-    #print(f'DEBUG final missing peaks: {missing}')
-    #print(f'DEBUG final extra peaks: {extra}')
+    #print(f'DEBUG final missing peaks: {peak_obs[missing] if len(missing) > 0 else np.array([]).reshape(-1, 2)}')
+    #print(f'DEBUG final extra peaks: {peak_calc[extra] if len(extra) > 0 else np.array([]).reshape(-1, 2)}')
     #print(f'DEBUG final wrong intensity peaks: {wrong_intens}')
 
     matched = [m for i, m in enumerate(matched) if i not in to_be_deleted]
@@ -243,7 +241,7 @@ class PeakMatcher:
         peak_calc: np.ndarray,
         peak_obs: np.ndarray,
         intensity_resolution: float = 0.005,
-        angle_resolution: float = 0.1,
+        angle_resolution: float = 0.3,
         angle_tolerance: float = DEFAULT_ANGLE_TOLERANCE,
         intensity_tolerance: float = DEFAULT_INTENSITY_TOLERANCE,
         max_intensity_tolerance: float = DEFAULT_MAX_INTENSITY_TOLERANCE,
@@ -284,7 +282,7 @@ class PeakMatcher:
         """Get the missing peaks in the `observed peaks`. The shape should be (N, 2) with [position, intensity]."""
         missing = self._result["missing"]
         missing = np.array(missing).reshape(-1)
-        
+        #print(f'DEBUG missing peaks indices: {self.peak_obs[missing] if len(missing) > 0 else np.array([]).reshape(-1, 2)}')
         
         return (
             self.peak_obs[missing] if len(missing) > 0 else np.array([]).reshape(-1, 2)
@@ -463,6 +461,7 @@ class PeakMatcher:
         -------
             the isolated missing peaks with [position, intensity]
         """
+        print(f'DEBUG getting isolated peaks of type: {peak_type}')
         if peak_type == "missing":
             peaks = self.missing
             matched = self.matched[1]
@@ -484,6 +483,10 @@ class PeakMatcher:
             matched[:, 0].reshape(-1, 1),
             metric="cityblock",
         )
+        #print(f'DEBUG {peak_type} peak in get_isolated_peaks: {peaks}, in total {len(peaks)}')
+        #print(f'DEBUG matched peaks in get_isolated_peaks: {matched}, in total {len(matched)}')
+        #for match in matched:
+            #print(f'DEBUG matched observed peaks in get_isolated_peaks: {match}')
         distance = np.min(distance, axis=1)
         min_intensity = self.peak_obs[:, 1].max() * min_intensity_ratio
 

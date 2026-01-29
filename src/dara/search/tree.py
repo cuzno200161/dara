@@ -85,6 +85,7 @@ def remote_peak_matching(
     results = []
 
     for peak_calc, peak_obs in batch:
+        #print(f'DEBUG remote peak matching')
         pm = PeakMatcher(peak_calc, peak_obs)
 
         if return_type == "PeakMatcher":
@@ -614,6 +615,7 @@ class BaseSearchTree(Tree):
                 
 
                 if new_result is not None:
+                    print(f'DEBUG expand node for new phases {[p.path.stem for p in new_phases]} with Rpb {new_result.lst_data.rpb}')
                     peak_matcher = PeakMatcher(
                         new_result.peak_data[["2theta", "intensity"]].values,
                         self.peak_obs,
@@ -623,7 +625,6 @@ class BaseSearchTree(Tree):
 
                     if memory_2thetas is not None and len(isolated_extra_peaks) > 0:
                         validated_extra_peaks = []
-                        
                         for extra_peak in isolated_extra_peaks:
                             # Check overlap against Parent's result (The "Memory")
                             # We use the parent's peaks because we know they are valid/accepted.
@@ -649,7 +650,7 @@ class BaseSearchTree(Tree):
                 print(f'DEBUG new_result rpb: {new_result.lst_data.rpb if new_result is not None else None}')
 
                 parent_isolated_extra_peaks = node.data.isolated_extra_peaks if node.data.isolated_extra_peaks is not None else []
-                
+
                 if new_result is None:
                     status = "error"
 
@@ -683,8 +684,10 @@ class BaseSearchTree(Tree):
                     break
                     
                 # Overfitting can lead to extra peaks 
-                elif len(isolated_extra_peaks) - len(parent_isolated_extra_peaks) >= 3:
-                    status = "extra_peaks"
+                #elif (len(isolated_extra_peaks) > 0 and \
+                #      np.max(isolated_extra_peaks[:, 1]) / max(new_result.plot_data.y_obs) > self.false_peak_threshold):                    
+                #    print(f'DEBUG isolated_extra_peaks: {isolated_extra_peaks}')
+                #    status = "extra_peaks"
             
                 elif abs(grouped_results[phase]["lattice_strain"]) > self.strain_threshold:
                     status = "high_strain"

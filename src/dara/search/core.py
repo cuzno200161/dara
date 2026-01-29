@@ -99,14 +99,14 @@ def downsample_xy(input_path: Path, output_path: Path, n_points: int, sigma: flo
     twotheta = data[:, 0]
     intensity = data[:, 1]
     
-    intensity_smooth = gaussian_filter1d(intensity, sigma=sigma)
+    #intensity_smooth = gaussian_filter1d(intensity, sigma=sigma)
 
     # Create new 2theta grid
     wmin, wmax = twotheta[0], twotheta[-1]
     new_twotheta = np.linspace(wmin, wmax, n_points)
 
     # Interpolate intensities onto new grid
-    new_intensity = np.interp(new_twotheta, twotheta, intensity_smooth)
+    new_intensity = np.interp(new_twotheta, twotheta, intensity)
 
     # Save downsized pattern
     np.savetxt(output_path, np.column_stack([new_twotheta, new_intensity]), fmt="%.6f %.6f")
