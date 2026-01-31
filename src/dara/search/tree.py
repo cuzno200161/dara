@@ -315,7 +315,7 @@ def remove_unnecessary_phases(
     original_rpb = rpb(y_calc, y_obs, y_bkg)
     
     new_phases = []
-    print(f"DEBUG checking unnecessary phases {list(phases_results.keys())}")
+    #print(f"DEBUG checking unnecessary phases {list(phases_results.keys())}")
 
     for excluded_phase in phases_results:
         # If this is the newly added phase, keep it automatically
@@ -326,7 +326,7 @@ def remove_unnecessary_phases(
         y_calc_excl = y_calc.copy()
         y_calc_excl -= phases_results[excluded_phase]
         new_rpb = rpb(y_calc_excl, y_obs, y_bkg)
-        print(f"DEBUG Removing phase {excluded_phase}: original RPB = {original_rpb}, new RPB = {new_rpb}")
+        #print(f"DEBUG Removing phase {excluded_phase}: original RPB = {original_rpb}, new RPB = {new_rpb}")
 
         if new_rpb > original_rpb + rpb_threshold:
             new_phases.append(cif_paths_dict[excluded_phase])
@@ -459,7 +459,7 @@ class BaseSearchTree(Tree):
         #print(f'DEBUG new_result.peak_data: {new_result.peak_data[["2theta", "intensity"]] if new_result is not None else None}')
         #print(f'DEBUG isolated_missing_peaks: {isolated_missing_peaks}')
         #print(f'DEBUG isolated_extra_peaks: {isolated_extra_peaks}')
-        print(f'DEBUG max_false_peak_intensity: {max_false_peak_intensity}, number of false peaks: {len(isolated_missing_peaks) + len(isolated_extra_peaks)}')
+        #print(f'DEBUG max_false_peak_intensity: {max_false_peak_intensity}, number of false peaks: {len(isolated_missing_peaks) + len(isolated_extra_peaks)}')
 
         if max_false_peak_intensity < self.false_peak_threshold and \
                 len(isolated_missing_peaks) + len(isolated_extra_peaks) <= 3 and \
@@ -501,14 +501,14 @@ class BaseSearchTree(Tree):
                 
             # remove phases that are already in the current result
             current_phases_set = set(node.data.current_phases)
-            print(f'DEBUG current phases set: {[p.path.stem for p in current_phases_set]}')
+            #print(f'DEBUG current phases set: {[p.path.stem for p in current_phases_set]}')
             all_phases_result = {
                 phase: result
                 for phase, result in self.all_phases_result.items()
                 if phase not in current_phases_set
             }
             
-            print(f'DEBUG all_phases_result: {[p.path.stem for p in all_phases_result.keys()]}')
+            #print(f'DEBUG all_phases_result: {[p.path.stem for p in all_phases_result.keys()]}')
             
             if not all_phases_result:
                 node.data.status = "expanded"
@@ -518,17 +518,17 @@ class BaseSearchTree(Tree):
                 all_phases_result, node.data.current_result, self.score_coefficients
             )
             
-            for phase, score in raw_scores.items():
-                print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
+            #for phase, score in raw_scores.items():
+            #    print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
                 
-            for phase, score in scores.items():
-                print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
+            #for phase, score in scores.items():
+            #    print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
             
-            for phase, score in best_phases.items():
-                print(f'DEBUG phase {phase.path.stem} score = {score}')
+            #for phase, score in best_phases.items():
+            #    print(f'DEBUG phase {phase.path.stem} score = {score}')
 
-            print(f'DEBUG : threshold = {threshold}')
-            print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
+            #print(f'DEBUG : threshold = {threshold}')
+            #print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
 
             if self.record_peak_matcher_scores:
                 node.data.peak_matcher_scores = scores
@@ -578,7 +578,7 @@ class BaseSearchTree(Tree):
 
             for phase, new_result in new_results.items():
                 if stop_flag is not None and ray.get(stop_flag.get.remote()):
-                    print('DEBUG early stopping activated, break expansion loop')
+                    #print('DEBUG early stopping activated, break expansion loop')
                     break
 
                 new_phases = [*node.data.current_phases, phase]
@@ -615,7 +615,7 @@ class BaseSearchTree(Tree):
                 
 
                 if new_result is not None:
-                    print(f'DEBUG expand node for new phases {[p.path.stem for p in new_phases]} with Rpb {new_result.lst_data.rpb}')
+                    #print(f'DEBUG expand node for new phases {[p.path.stem for p in new_phases]} with Rpb {new_result.lst_data.rpb}')
                     peak_matcher = PeakMatcher(
                         new_result.peak_data[["2theta", "intensity"]].values,
                         self.peak_obs,
@@ -644,10 +644,10 @@ class BaseSearchTree(Tree):
                     isolated_missing_peaks = []
                     isolated_extra_peaks = []
 
-                print(f"DEBUG current phases: {[p.path.stem for p in node.data.current_phases]}")
-                print(f'DEBUG current node rpb: {node.data.current_result.lst_data.rpb if node.data.current_result is not None else None}')    
-                print(f'DEBUG new phases: {[p.path.stem for p in new_phases]}')
-                print(f'DEBUG new_result rpb: {new_result.lst_data.rpb if new_result is not None else None}')
+                #print(f"DEBUG current phases: {[p.path.stem for p in node.data.current_phases]}")
+                #print(f'DEBUG current node rpb: {node.data.current_result.lst_data.rpb if node.data.current_result is not None else None}')    
+                #print(f'DEBUG new phases: {[p.path.stem for p in new_phases]}')
+                #print(f'DEBUG new_result rpb: {new_result.lst_data.rpb if new_result is not None else None}')
 
                 parent_isolated_extra_peaks = node.data.isolated_extra_peaks if node.data.isolated_extra_peaks is not None else []
 
@@ -727,7 +727,7 @@ class BaseSearchTree(Tree):
                         parent=nid,
                     )
 
-                    print('DEBUG early stopping condition met, node created, flag set')
+                    #print('DEBUG early stopping condition met, node created, flag set')
                     
                     # Set the global early stop flag
                     #if stop_flag is not None:
@@ -1281,7 +1281,7 @@ class SearchTree(BaseSearchTree):
             nthreads=os.cpu_count(),
         )
         time_end = time.time()
-        print(f"DEBUG Peak detection took {time_end - time_start:.2f} seconds.")
+        #print(f"DEBUG Peak detection took {time_end - time_start:.2f} seconds.")
         if len(peak_list) == 0:
             raise ValueError("No peaks are detected in the pattern.")
 
@@ -1346,7 +1346,7 @@ class SearchTree(BaseSearchTree):
             pinned_phases=self.pinned_phases,
         )
         time_end = time.time()
-        print(f"DEBUG Initial refinement of all phases took {time_end - time_start:.2f} seconds.")
+        #print(f"DEBUG Initial refinement of all phases took {time_end - time_start:.2f} seconds.")
 
 
 
