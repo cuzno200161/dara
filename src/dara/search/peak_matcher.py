@@ -461,7 +461,7 @@ class PeakMatcher:
         -------
             the isolated missing peaks with [position, intensity]
         """
-        print(f'DEBUG getting isolated peaks of type: {peak_type}')
+        #print(f'DEBUG getting isolated peaks of type: {peak_type}')
         if peak_type == "missing":
             peaks = self.missing
             matched = self.matched[1]
