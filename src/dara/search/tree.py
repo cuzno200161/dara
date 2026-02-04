@@ -521,11 +521,11 @@ class BaseSearchTree(Tree):
             for phase, score in raw_scores.items():
                 print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
                 
-            #for phase, score in scores.items():
-            #    print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
+            for phase, score in scores.items():
+                print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
             
             for phase, score in best_phases.items():
-                print(f'DEBUG phase {phase.path.stem} score = {score}')
+                print(f'DEBUG best phases {phase.path.stem} score = {score}')
 
             print(f'DEBUG : threshold = {threshold}')
             #print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
@@ -912,9 +912,7 @@ class BaseSearchTree(Tree):
         # 2. Batch Match against Residual
         cands_data = [res.peak_data[res.peak_data["phase"] == p.path.stem][["2theta", "intensity"]].values 
                       for p, res in all_phases_result.items()]
-        
-        
-        #print('DEBUG score_phases')
+                
         matchers = dict(zip(all_phases_result.keys(), 
                             batch_peak_matching(cands_data, missing_peaks, return_type="PeakMatcher")))
 
@@ -925,45 +923,30 @@ class BaseSearchTree(Tree):
                 scores[phase] = 0
                 continue
 
-            # --- A. BASE INTENSITIES ---
             m_obs, m_calc = m.matched
             w_obs, w_calc = m.wrong_intensity
             
-            # Use 'min' rule for conservative matching
             I_matched = np.sum(np.abs(min([m_obs, m_calc], key=lambda x: x[:, 1].sum())[:, 1])) if len(m_obs) > 0 else 0
             I_wrong_intensity = np.sum(np.abs(min([w_obs, w_calc], key=lambda x: x[:, 1].sum())[:, 1])) if len(w_obs) > 0 else 0
             I_missing = np.sum(np.abs(m.missing[:, 1]))
             I_extra = np.sum(np.abs(m.extra[:, 1]))
             
-            #print(f'extra peaks before salvage for phase {phase.path.stem}: {m.extra}')
-
-            # --- B. OVERLAP LOGIC (Replaces Manual Memory) ---
-            # If we have a current result, check if 'Extra' peaks are actually overlapping
-            # with phases we already found.
+            # If we have a current result, check if Extra peaks are actually overlapping
             if ref_peaks is not None:
-                #print(f'DEBUG ref_peaks: {ref_peaks}')
                 # Match candidate peaks against the Previous Refined Phases
                 m_overlap = PeakMatcher(m.peak_calc, ref_peaks, angle_tolerance=self.angle_tolerance)
                 
-                # We accept overlaps regardless of intensity (matched OR wrong_intensity)
-                # because the refined intensity might have fluctuated.
+                # Accept overlaps regardless of intensity
                 overlap_hits = set(m_overlap.matched_indices_calc) | set(m_overlap.wrong_intensity_indices_calc)
-                extra_indices = set(m.extra_indices_calc)
-                
-                #print(f'DEBUG matched_indices_calc: {m_overlap.matched}')
-                #print(f'DEBUG wrong_intensity: {m_overlap.wrong_intensity}')
-                #print(f'DEBUG extra_indices: {m.extra}')
-                # Intersection: 'Extra' in residual AND 'Exists' in previous phases
+                extra_indices = set(m.extra_indices_calc)           
                 salvage_indices = list(extra_indices & overlap_hits)
-                
-                
+                 
                 if salvage_indices:
                     I_salvaged = np.sum(np.abs(m.peak_calc[salvage_indices, 1]))
                     I_wrong_intensity += I_salvaged
                     I_extra -= I_salvaged
                     if I_extra < 0: I_extra = 0
 
-            # --- C. FINAL SCORE ---
             scores[phase] = m.calculate_intensity_score(
                 I_matched, I_wrong_intensity, I_missing, I_extra, I_obs_total, **coeffs
             )
@@ -972,7 +955,8 @@ class BaseSearchTree(Tree):
         # 3. Thresholding
         threshold, _ = find_optimal_score_threshold(list(scores.values()))
         threshold = max(threshold, 0)
-        threshold = min(threshold, 0.95)
+        if len(all_phases_result) <= 10:  
+            threshold = min(threshold, 0.60)  # Cap the threshold to avoid too strict filtering
         
         filtered = {p: s for p, s in scores.items() if s >= threshold and s > 0}
         sorted_results = dict(sorted(filtered.items(), 
