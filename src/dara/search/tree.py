@@ -518,16 +518,16 @@ class BaseSearchTree(Tree):
                 all_phases_result, node.data.current_result, self.score_coefficients
             )
             
-            for phase, score in raw_scores.items():
-                print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
+            #for phase, score in raw_scores.items():
+            #    print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
                 
-            for phase, score in scores.items():
-                print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
+            #for phase, score in scores.items():
+            #    print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
             
-            for phase, score in best_phases.items():
-                print(f'DEBUG best phases {phase.path.stem} score = {score}')
+            #for phase, score in best_phases.items():
+            #    print(f'DEBUG best phases {phase.path.stem} score = {score}')
 
-            print(f'DEBUG : threshold = {threshold}')
+            #print(f'DEBUG : threshold = {threshold}')
             #print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
 
             if self.record_peak_matcher_scores:
