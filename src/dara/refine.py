@@ -99,8 +99,6 @@ def do_refinement(
     elif pattern_path.suffix == ".rasx":
         pattern_path = rasx2xy(pattern_path, working_dir)
 
-    # Downsizing if necessary
-
     str_paths = []
     for phase_path in phases:
         phase = RefinementPhase.make(phase_path)

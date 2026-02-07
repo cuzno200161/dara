@@ -1183,9 +1183,6 @@ class SearchTree(BaseSearchTree):
             **kwargs,
         )
 
-        # side effect: if enable_angular_cut is set to True (default),
-        # sets self.peak_obs and self.refinement_params["wmax"] in the function
-        # for all situation, will also update the initial guess of b1 in self.refinement_params
         self.enable_angular_cut = enable_angular_cut
         self._detect_peak_in_pattern()
 
@@ -1206,12 +1203,22 @@ class SearchTree(BaseSearchTree):
         
         if self.express_mode:
             logger.info("Express mode is enabled. Grouping phases before starting.")
+            
+            grouping_input = all_phases_result.copy()
+            
+            # Inject pinned phases into the grouping input
+            if root_node.data.current_result is not None:
+                for pp in self.pinned_phases:
+                    grouping_input[pp] = root_node.data.current_result
+
             phases_grouped = group_phases(
-                all_phases_result,
+                grouping_input,
                 distance_threshold=self.maximum_grouping_distance,
             )
+            
             phase_group_mapping = {}
 
+            # Build mapping with extra metadata to identify pinned phases
             for phase in phases_grouped:
                 group_id = phases_grouped[phase]["group_id"]
                 phase_group_mapping.setdefault(group_id, []).append(
@@ -1219,26 +1226,32 @@ class SearchTree(BaseSearchTree):
                         "phase": phase,
                         "fom": phases_grouped[phase]["fom"],
                         "lattice_strain": phases_grouped[phase]["lattice_strain"],
+                        "is_pinned": phase in self.pinned_phases
                     }
                 )
 
-            for group in phase_group_mapping:  # noqa: PLC0206
-                phase_group_mapping[group] = sorted(
-                    phase_group_mapping[group],
-                    key=lambda x: x["fom"],
-                    reverse=True,
-                )
+            # Filter candidates for search
+            final_candidates = {}
+            for group, members in phase_group_mapping.items():
+                # Sort members by FOM descending
+                members.sort(key=lambda x: x["fom"], reverse=True)
+                
+                best_member = members[0]
+                
+                # If the winner is a pinned phase, we do not add it to the search candidates.
+                # If the winner is a regular phase, we add it.
+                if not best_member["is_pinned"]:
+                    # Ensure we can actually find the result in the candidates dict
+                    if best_member["phase"] in all_phases_result:
+                        final_candidates[best_member["phase"]] = all_phases_result[best_member["phase"]]
+                
             logger.info(
-                f"Phases are grouped into {len(phase_group_mapping)} groups. In "
-                f"express mode, only the best phase in each group will be considered during the search."
+                f"Phases are grouped into {len(phase_group_mapping)} groups. "
+                f"Pinned phases were included to mask duplicate candidates."
             )
+            
             self.phases_grouped = phases_grouped
-            self.all_phases_result = {
-                phase_group_mapping[group][0]["phase"]: all_phases_result[
-                    phase_group_mapping[group][0]["phase"]
-                ]
-                for group in phase_group_mapping
-            }
+            self.all_phases_result = final_candidates
         else:
             self.phases_grouped = {}
             self.all_phases_result = all_phases_result
