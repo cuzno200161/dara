@@ -537,8 +537,7 @@ class BaseSearchTree(Tree):
             # Check for duplicate nodes
             final_candidates = {}
             
-            # We collect the reservations we need to make first to batch the remote call (optional, but faster)
-            # Or simpler: check one by one. Since Ray is fast, one by one is fine for <50 items.
+            # We collect the reservations we need to make first to batch the remote call 
             for phase, score in best_phases.items():
                 potential_phases = [*node.data.current_phases, phase]
                 
@@ -960,7 +959,7 @@ class BaseSearchTree(Tree):
         
         filtered = {p: s for p, s in scores.items() if s >= threshold and s > 0}
         sorted_results = dict(sorted(filtered.items(), 
-                                     key=lambda x: len(all_phases_result[x[0]].peak_data), 
+                                     key=lambda x: x[1] * np.log1p(len(all_phases_result[x[0]].peak_data)), 
                                      reverse=True))
 
         return sorted_results, scores, raw_scores, threshold
