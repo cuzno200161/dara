@@ -303,7 +303,7 @@ def remove_unnecessary_phases(
     result: RefinementResult, 
     cif_paths: list[Path], 
     rpb_threshold: float = 0.0,
-    protected_phase: str | None = None  # Add this
+    protected_phase: str | None = None
 ) -> list[Path]:
     
     phases_results = {k: np.array(v) for k, v in result.plot_data.structs.items()}
@@ -358,7 +358,8 @@ def get_natural_break_results(
         ]
         all_rhos = [result.refinement_result.lst_data.rho for result in results]
     if sorting:
-        results = sorted(results, key=lambda x: x.refinement_result.lst_data.rwp)
+        #results = sorted(results, key=lambda x: x.refinement_result.lst_data.rwp)
+        results = sorted(results, key=lambda x: x.refinement_result.lst_data.rwp + 1.5 * len(x.phases))
 
     return results
 
@@ -518,17 +519,17 @@ class BaseSearchTree(Tree):
                 all_phases_result, node.data.current_result, self.score_coefficients
             )
             
-            #for phase, score in raw_scores.items():
-            #    print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
+            for phase, score in raw_scores.items():
+                print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
                 
-            #for phase, score in scores.items():
-            #    print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
+            for phase, score in scores.items():
+                print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
             
-            #for phase, score in best_phases.items():
-            #    print(f'DEBUG best phases {phase.path.stem} score = {score}')
+            for phase, score in best_phases.items():
+                print(f'DEBUG best phases {phase.path.stem} score = {score}')
 
-            #print(f'DEBUG : threshold = {threshold}')
-            #print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
+            print(f'DEBUG : threshold = {threshold}')
+            print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
 
             if self.record_peak_matcher_scores:
                 node.data.peak_matcher_scores = scores
@@ -651,7 +652,17 @@ class BaseSearchTree(Tree):
                 parent_isolated_extra_peaks = node.data.isolated_extra_peaks if node.data.isolated_extra_peaks is not None else []
 
                 if new_result is None:
-                    status = "error"
+                    status = "error"  
+
+                # Overfitting can lead to extra peaks 
+                # Setting a more tolerant threshold that prevents excluding true phases
+                elif (len(isolated_extra_peaks) > 0 and \
+                      np.max(isolated_extra_peaks[:, 1]) / max(new_result.plot_data.y_obs) > 2 * self.false_peak_threshold):
+                    print(f'DEBUG isolated_extra_peaks: {isolated_extra_peaks}')
+                    status = "extra_peaks"
+            
+                elif abs(grouped_results[phase]["lattice_strain"]) > self.strain_threshold:
+                    status = "high_strain"
 
                 # TODO if overfitting is detected for the 2nd layer node, then it might be worth it to permanantly remove the parent node
                 # If removing one phase does not improve the result, this indicats overfitting
@@ -681,16 +692,7 @@ class BaseSearchTree(Tree):
                     # When overfitting happens, it denotes that the new pahses explains pattern better than previous ones
                     # Thus, previous phases are no longer needed, we can stop expanding this branch
                     break
-                    
-                # Overfitting can lead to extra peaks 
-                #elif (len(isolated_extra_peaks) > 0 and \
-                #      np.max(isolated_extra_peaks[:, 1]) / max(new_result.plot_data.y_obs) > self.false_peak_threshold):                    
-                #    print(f'DEBUG isolated_extra_peaks: {isolated_extra_peaks}')
-                #    status = "extra_peaks"
-            
-                elif abs(grouped_results[phase]["lattice_strain"]) > self.strain_threshold:
-                    status = "high_strain"
-
+                
                 # Removing low weight fraction check for now
                 #elif is_low_weight_fraction:
                 #    status = "low_weight_fraction"
@@ -942,7 +944,7 @@ class BaseSearchTree(Tree):
                  
                 if salvage_indices:
                     I_salvaged = np.sum(np.abs(m.peak_calc[salvage_indices, 1]))
-                    I_wrong_intensity += I_salvaged
+                    #I_wrong_intensity += I_salvaged
                     I_extra -= I_salvaged
                     if I_extra < 0: I_extra = 0
 
@@ -954,7 +956,7 @@ class BaseSearchTree(Tree):
         # 3. Thresholding
         threshold, _ = find_optimal_score_threshold(list(scores.values()))
         threshold = max(threshold, 0)
-        if len(all_phases_result) <= 10:  
+        if len(all_phases_result) <= 6:  
             threshold = min(threshold, 0.60)  # Cap the threshold to avoid too strict filtering
         
         filtered = {p: s for p, s in scores.items() if s >= threshold and s > 0}
