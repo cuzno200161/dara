@@ -596,7 +596,7 @@ class BaseSearchTree(Tree):
                 )
 
                 #if new_result is not None:
-                #   searched_phases = [
+                #    searched_phases = [
                 #        p for p in new_phases if p not in self.pinned_phases
                 #    ]
                 #    sorted_searched_phases = sorted(
@@ -926,6 +926,11 @@ class BaseSearchTree(Tree):
 
             m_obs, m_calc = m.matched
             w_obs, w_calc = m.wrong_intensity
+
+            print(f'DEBUG phase {phase.path.stem} matched peaks: {m_obs}, {m_calc}')
+            print(f'DEBUG phase {phase.path.stem} wrong intensity peaks: {w_obs}, {w_calc}')
+            print(f'DEBUG phase {phase.path.stem} missing peaks: {m.missing}')
+            print(f'DEBUG phase {phase.path.stem} extra peaks: {m.extra}')
             
             I_matched = np.sum(np.abs(min([m_obs, m_calc], key=lambda x: x[:, 1].sum())[:, 1])) if len(m_obs) > 0 else 0
             I_wrong_intensity = np.sum(np.abs(min([w_obs, w_calc], key=lambda x: x[:, 1].sum())[:, 1])) if len(w_obs) > 0 else 0
@@ -944,7 +949,7 @@ class BaseSearchTree(Tree):
                  
                 if salvage_indices:
                     I_salvaged = np.sum(np.abs(m.peak_calc[salvage_indices, 1]))
-                    #I_wrong_intensity += I_salvaged
+                    I_wrong_intensity += I_salvaged
                     I_extra -= I_salvaged
                     if I_extra < 0: I_extra = 0
 
@@ -1189,7 +1194,7 @@ class SearchTree(BaseSearchTree):
 
         self.intensity_threshold = min(
             find_optimal_intensity_threshold(self.peak_obs[:, 1]),
-            0.1 * np.max(self.peak_obs[:, 1]),
+            0.01 * np.max(self.peak_obs[:, 1]),
         )
         logger.info(
             f"The intensity threshold is automatically set "
@@ -1278,6 +1283,8 @@ class SearchTree(BaseSearchTree):
             show_progress=False,
             nthreads=os.cpu_count(),
         )
+        print(f"DEBUG Detected {len(peak_list)} peaks in the pattern.")
+        print(f"DEBUG whole peak list: {peak_list[['2theta', 'intensity']].values}")
         time_end = time.time()
         #print(f"DEBUG Peak detection took {time_end - time_start:.2f} seconds.")
         if len(peak_list) == 0:

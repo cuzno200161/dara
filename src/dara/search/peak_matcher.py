@@ -131,8 +131,8 @@ def find_best_match(
         matched.append((peak_idx, best_match_idx))
         residual_peak_obs[best_match_idx, 1] -= peak[1]
         
-    #print(f'DEBUG residual_peak_obs after matching: {residual_peak_obs}')
-    #print(f'DEBUG temporary matched peaks: {matched}')
+    print(f'DEBUG residual_peak_obs after matching: {residual_peak_obs}')
+    print(f'DEBUG temporary matched peaks: {matched}')
 
     all_assigned = {m[1] for m in matched}
     missing = [i for i in range(len(peak_obs)) if i not in all_assigned]
@@ -201,6 +201,11 @@ def merge_peaks(peaks: np.ndarray, resolution: float = 0.0) -> np.ndarray:
         two_theta_i = two_thetas[i]
         two_theta_im1 = two_thetas[i - 1]
         if np.abs(two_theta_im1 - two_theta_i) <= resolution:
+
+
+
+
+
             merge_to[i] = merge_to[i - 1]
 
     ptr_1 = ptr_2 = merge_to[0]
@@ -240,7 +245,7 @@ class PeakMatcher:
         self,
         peak_calc: np.ndarray,
         peak_obs: np.ndarray,
-        intensity_resolution: float = 0.005,
+        intensity_resolution: float = 0.0,
         angle_resolution: float = 0.3,
         angle_tolerance: float = DEFAULT_ANGLE_TOLERANCE,
         intensity_tolerance: float = DEFAULT_INTENSITY_TOLERANCE,
@@ -371,7 +376,7 @@ class PeakMatcher:
         ratio_matched = I_matched / I_phase
         ratio_wrong_intensity = I_wrong_intensity / I_phase
         ratio_missing = I_missing / I_obs_total
-        ratio_extra = I_extra / I_phase
+        ratio_extra = I_extra / I_obs_total
 
         # 3. Weighted Sum
         return (

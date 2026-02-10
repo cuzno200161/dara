@@ -452,7 +452,7 @@ def find_optimal_score_threshold(
 
 
 def find_optimal_intensity_threshold(
-    intensities: list[float] | np.ndarray, percentile: float = 90
+    intensities: list[float] | np.ndarray, percentile: float = 99
 ) -> float:
     """
     Find the intensity threshold that captures percentile% of the intensities.
