@@ -447,7 +447,7 @@ class PeakMatcher:
         min_intensity_ratio: float = 0.005,
     ) -> np.ndarray:
         """
-        Get the isolated missing peaks in the `observed peaks`.
+        Get the isolated missing/extra peaks in the `observed peaks`.
 
         The isolated missing/extra peaks are the missing/extra peaks that are not close to any other
         peaks in matched and wrong intensity peaks.

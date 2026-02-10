@@ -656,10 +656,10 @@ class BaseSearchTree(Tree):
 
                 # Overfitting can lead to extra peaks 
                 # Setting a more tolerant threshold that prevents excluding true phases
-                elif (len(isolated_extra_peaks) > 0 and \
-                      np.max(isolated_extra_peaks[:, 1]) / max(new_result.plot_data.y_obs) > 2 * self.false_peak_threshold):
-                    print(f'DEBUG isolated_extra_peaks: {isolated_extra_peaks}')
-                    status = "extra_peaks"
+                #elif (len(isolated_extra_peaks) > 0 and \
+                #      np.max(isolated_extra_peaks[:, 1]) / max(new_result.plot_data.y_obs) > 2 * self.false_peak_threshold):
+                #    print(f'DEBUG isolated_extra_peaks: {isolated_extra_peaks}')
+                #    status = "extra_peaks"
             
                 elif abs(grouped_results[phase]["lattice_strain"]) > self.strain_threshold:
                     status = "high_strain"
