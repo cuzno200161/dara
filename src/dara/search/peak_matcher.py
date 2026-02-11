@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 import numpy as np
 from scipy.spatial.distance import cdist
@@ -12,14 +12,6 @@ DEFAULT_MAX_INTENSITY_TOLERANCE = 5
 def absolute_log_error(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     """
     Calculate the absolute error of two arrays in log space.
-
-    Args:
-        x: array 1
-        y: array 2
-
-    Returns
-    -------
-        the absolute error in log space
     """
     x = np.clip(x, 1e-10, None)
     y = np.clip(y, 1e-10, None)
@@ -29,18 +21,6 @@ def absolute_log_error(x: np.ndarray, y: np.ndarray) -> np.ndarray:
 def distance_matrix(peaks1: np.ndarray, peaks2: np.ndarray) -> np.ndarray:
     """
     Return the distance matrix between two sets of peaks.
-
-    The distance is defined as the maximum of the distance in position and the distance in intensity.
-    The position distance is the absolute difference in position.
-    The intensity distance is the absolute difference in log intensity.
-
-    Args:
-        peaks1: (n, 2) array of peaks with [position, intensity]
-        peaks2: (m, 2) array of peaks with [position, intensity]
-
-    Returns
-    -------
-        (n, m) distance matrix
     """
     position_distance = cdist(
         peaks1[:, 0].reshape(-1, 1), peaks2[:, 0].reshape(-1, 1), metric="cityblock"
@@ -50,7 +30,6 @@ def distance_matrix(peaks1: np.ndarray, peaks2: np.ndarray) -> np.ndarray:
         peaks2[:, 1].reshape(-1, 1),
         metric=absolute_log_error,
     )
-
     return np.sum(np.array([position_distance, intensity_distance]), axis=0)
 
 
@@ -61,32 +40,6 @@ def find_best_match(
     intensity_tolerance: float = DEFAULT_INTENSITY_TOLERANCE,
     max_intensity_tolerance: float = DEFAULT_MAX_INTENSITY_TOLERANCE,
 ) -> dict[str, Any]:
-    """
-    Find the best match between two sets of peaks.
-
-    Args:
-        peak_calc: the calculated peaks, (n, 2) array of peaks with [position, intensity]
-        peak_obs: the observed peaks, (m, 2) array of peaks with [position, intensity]
-        angle_tolerance: the maximum difference in angle
-        intensity_tolerance: the maximum ratio of the intensities
-        max_intensity_tolerance: the maximum ratio of the intensities to be considered as missing instead of wrong intensity
-
-    Returns
-    -------
-        missing[j]:
-            the indices of the missing peaks in the ``obs peaks``
-        matched[i, j]:
-            the indices of both the matched peaks in the ``calculated peaks``
-            and the ``observed peaks`` 
-        extra[i]: the indices of the extra peaks in the
-            ``calculated peaks``
-        wrong_intensity[i, j]:
-            the indices of the peaks with wrong intensities in both
-            the ``calculated peaks`` and the ``observed peaks``
-        residual_peaks (N_peak_obs, 2):
-            the residual peaks after matching (not including
-            extra peaks in peak_calc)
-    """
     matched = []
     extra = []
     wrong_intens = []
@@ -109,8 +62,11 @@ def find_best_match(
         }
 
     residual_peak_obs = peak_obs.copy()
-    # The for loop handles matched peaks and substract them original peaks
-    for peak_idx in np.argsort(peak_calc[:, 1])[::-1]:  # sort by intensity
+    
+    # Process calculated peaks (sorted by intensity descending)
+    sorted_indices = np.argsort(peak_calc[:, 1])[::-1]
+    
+    for peak_idx in sorted_indices:
         peak = peak_calc[peak_idx]
 
         all_close_obs_peaks_idx = np.where(
@@ -122,50 +78,39 @@ def find_best_match(
             extra.append(peak_idx)
             continue
 
-        best_match_idx = all_close_obs_peaks_idx[
-            np.argmin(
-                distance_matrix(np.array([peak]), all_close_obs_peaks).reshape(-1)
-            )
-        ]
+        best_match_sub_idx = np.argmin(
+            distance_matrix(np.array([peak]), all_close_obs_peaks).reshape(-1)
+        )
+        best_match_idx = all_close_obs_peaks_idx[best_match_sub_idx]
 
         matched.append((peak_idx, best_match_idx))
-        residual_peak_obs[best_match_idx, 1] -= peak[1]
         
-    print(f'DEBUG residual_peak_obs after matching: {residual_peak_obs}')
-    print(f'DEBUG temporary matched peaks: {matched}')
+        # Consuming intensity
+        obs_I_before = residual_peak_obs[best_match_idx, 1]
+        residual_peak_obs[best_match_idx, 1] -= peak[1]
 
     all_assigned = {m[1] for m in matched}
     missing = [i for i in range(len(peak_obs)) if i not in all_assigned]
-    #print(f'DEBUG intermediate missing peaks: {peak_obs[missing] if len(missing) > 0 else np.array([]).reshape(-1, 2)}')
 
-    # tell if a peak has wrong intensity by the sum of the intensities of the matched peaks
     to_be_deleted = set()
     for i in range(len(matched)):
-        peak_idx = matched[i][1]
+        calc_idx = matched[i][0]
+        obs_idx = matched[i][1]
+        
         peak_intensity_diff = absolute_log_error(
-            peak_obs[peak_idx][1],
-            peak_obs[peak_idx][1] - residual_peak_obs[peak_idx][1],
+            peak_obs[obs_idx][1],
+            peak_obs[obs_idx][1] - residual_peak_obs[obs_idx][1],
         )
 
-        # Detecting wrong intensity peaks
         if peak_intensity_diff > np.log(intensity_tolerance):
             wrong_intens.append(matched[i])
             to_be_deleted.add(i)
 
-        # Detecting missing peaks
         if -peak_intensity_diff > np.log(max_intensity_tolerance):
-            missing.append(peak_idx)
-            #print(f'DEBUG adding to missing due to large negative intensity diff: {peak_obs[peak_idx]}')
+            missing.append(obs_idx)
             to_be_deleted.add(i)
 
-        #print(f'DEBUG to_be_deleted indices: {to_be_deleted}')
-            
-    #print(f'DEBUG final missing peaks: {peak_obs[missing] if len(missing) > 0 else np.array([]).reshape(-1, 2)}')
-    #print(f'DEBUG final extra peaks: {peak_calc[extra] if len(extra) > 0 else np.array([]).reshape(-1, 2)}')
-    #print(f'DEBUG final wrong intensity peaks: {wrong_intens}')
-
     matched = [m for i, m in enumerate(matched) if i not in to_be_deleted]
-    #print(f'DEBUG final matched peaks: {matched}')
 
     return {
         "missing": missing,
@@ -177,35 +122,15 @@ def find_best_match(
 
 
 def merge_peaks(peaks: np.ndarray, resolution: float = 0.0) -> np.ndarray:
-    """
-    Merge peaks that are too close to each other (smaller than resolution).
-
-    Args:
-        peaks: the peaks to merge
-        resolution: the resolution to use for merging
-
-    Returns
-    -------
-        the merged peaks
-    """
     if len(peaks) <= 1 or resolution == 0.0:
         return peaks
 
-    # sorted by 0th column
     peaks = peaks[np.argsort(peaks[:, 0])]
-
     merge_to = np.arange(len(peaks))
     two_thetas = peaks[:, 0]
 
     for i in range(1, len(peaks)):
-        two_theta_i = two_thetas[i]
-        two_theta_im1 = two_thetas[i - 1]
-        if np.abs(two_theta_im1 - two_theta_i) <= resolution:
-
-
-
-
-
+        if np.abs(two_thetas[i - 1] - two_thetas[i]) <= resolution:
             merge_to[i] = merge_to[i - 1]
 
     ptr_1 = ptr_2 = merge_to[0]
@@ -218,7 +143,6 @@ def merge_peaks(peaks: np.ndarray, resolution: float = 0.0) -> np.ndarray:
 
         updated_angle = angles @ intensities / np.sum(intensities)
         updated_intensity = np.sum(intensities)
-
         new_peaks_list.append([updated_angle, updated_intensity])
 
         ptr_1 = ptr_2
@@ -229,31 +153,28 @@ def merge_peaks(peaks: np.ndarray, resolution: float = 0.0) -> np.ndarray:
 class PeakMatcher:
     """
     Peak matcher class to match the calculated peaks with the observed peaks.
-
-    Args:
-        peak_calc: the calculated peaks, (n, 2) array of peaks with [position, intensity]
-        peak_obs: the observed peaks, (m, 2) array of peaks with [position, intensity]
-        intensity_resolution: the resolution for the intensity, default to 0.01. Filter out peaks with lower intensity
-        angle_resolution: the resolution for the angle, default to 0.1
-        angle_tolerance: the maximum difference in angle, default to 0.3
-        intensity_tolerance: the maximum ratio of the intensities, default to 2
-        max_intensity_tolerance: the maximum ratio of the intensities to be considered as missing or extra,
-            default to 10
     """
 
     def __init__(
         self,
         peak_calc: np.ndarray,
         peak_obs: np.ndarray,
-        intensity_resolution: float = 0.0,
+        peak_obs_orig: np.ndarray | None = None,
+        intensity_resolution: float = 0.005,
         angle_resolution: float = 0.3,
         angle_tolerance: float = DEFAULT_ANGLE_TOLERANCE,
         intensity_tolerance: float = DEFAULT_INTENSITY_TOLERANCE,
         max_intensity_tolerance: float = DEFAULT_MAX_INTENSITY_TOLERANCE,
+        debug: bool = False,
     ):
         self.intensity_resolution = intensity_resolution
         self.angle_resolution = angle_resolution
+        self.debug = debug
 
+        # Initialize overrides (Fix for AttributeError)
+        self._extra_override = None
+        self._wrong_intensity_override = None
+        
         peak_calc = peak_calc.reshape(-1, 2)
         peak_obs = peak_obs.reshape(-1, 2)
 
@@ -261,19 +182,15 @@ class PeakMatcher:
             (peak_calc[:, 1] > 0)
             & (peak_calc[:, 1] > intensity_resolution * peak_calc[:, 1].max(initial=0))
         ]
-
         self.peak_calc = merge_peaks(peak_calc, resolution=angle_resolution)
 
         peak_obs = peak_obs[
             (peak_obs[:, 1] > 0)
             & (peak_obs[:, 1] > intensity_resolution * peak_obs[:, 1].max(initial=0))
         ]
-
         self.peak_obs = merge_peaks(peak_obs, resolution=angle_resolution)
-        
-        #print(f'DEBUG peak_obs after merging: {self.peak_obs}')
-        #print(f'DEBUG peak_calc after merging: {self.peak_calc}')
 
+        # 1. Run Standard Match
         self._result = find_best_match(
             self.peak_calc,
             self.peak_obs,
@@ -282,24 +199,22 @@ class PeakMatcher:
             max_intensity_tolerance=max_intensity_tolerance,
         )
 
+        # 2. Salvage Step (Now safe to access self.extra)
+        if peak_obs_orig is not None and len(self.extra) > 0:
+            self._salvage_extras(peak_obs_orig, angle_tolerance)
+
     @property
     def missing(self) -> np.ndarray:
-        """Get the missing peaks in the `observed peaks`. The shape should be (N, 2) with [position, intensity]."""
         missing = self._result["missing"]
         missing = np.array(missing).reshape(-1)
-        #print(f'DEBUG missing peaks indices: {self.peak_obs[missing] if len(missing) > 0 else np.array([]).reshape(-1, 2)}')
-        
         return (
             self.peak_obs[missing] if len(missing) > 0 else np.array([]).reshape(-1, 2)
         )
 
     @property
     def matched(self) -> tuple[np.ndarray, np.ndarray]:
-        """Get the matched peaks in both the `calculated peaks` and the `observed peaks`."""
         matched = self._result["matched"]
         matched = np.array(matched).reshape(-1, 2)
-        
-        
         return (
             self.peak_calc[matched[:, 0]]
             if len(matched) > 0
@@ -311,46 +226,70 @@ class PeakMatcher:
 
     @property
     def extra(self) -> np.ndarray:
-        """Get the extra peaks in the `calculated peaks`."""
+        # Check override first
+        if self._extra_override is not None:
+            return self._extra_override
+            
         extra = self._result["extra"]
         extra = np.array(extra).reshape(-1)
-        
-        
         return self.peak_calc[extra] if len(extra) > 0 else np.array([]).reshape(-1, 2)
 
     @property
     def wrong_intensity(self) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Get the indices of the peaks with wrong intensities in both the
-        `calculated peaks` and the `observed peaks`.
-        """
+        # Check override first
+        if self._wrong_intensity_override is not None:
+            return self._wrong_intensity_override
+            
         wrong_intens = self._result["wrong_intensity"]
         wrong_intens = np.array(wrong_intens).reshape(-1, 2)
-        
-
         return (
-            self.peak_calc[np.array(wrong_intens)[:, 0]]
+            self.peak_calc[wrong_intens[:, 0]]
             if len(wrong_intens) > 0
             else np.array([]).reshape(-1, 2),
-            self.peak_obs[np.array(wrong_intens)[:, 1]]
+            self.peak_obs[wrong_intens[:, 1]]
             if len(wrong_intens) > 0
             else np.array([]).reshape(-1, 2),
         )
 
     @property
     def matched_indices_calc(self) -> list[int]:
-        """Indices of calculated peaks that were matched."""
         return [m[0] for m in self._result["matched"]]
-    
+
     @property
     def wrong_intensity_indices_calc(self) -> list[int]:
-        """Indices of calculated peaks that had wrong intensity."""
         return [m[0] for m in self._result["wrong_intensity"]]
-    
+
     @property
     def extra_indices_calc(self) -> list[int]:
-        """Indices of calculated peaks that were extra."""
         return self._result["extra"]
+    
+    def _salvage_extras(self, peak_obs_orig: np.ndarray, tolerance: float):
+        if len(peak_obs_orig) == 0: 
+            return
+
+        # Calculate distances between Extra peaks and Original Observed peaks
+        dists = cdist(self.extra[:, 0:1], peak_obs_orig[:, 0:1], metric='cityblock')
+        min_dists = np.min(dists, axis=1)
+        closest_indices = np.argmin(dists, axis=1)
+
+        is_salvageable = min_dists <= tolerance
+        
+        if not np.any(is_salvageable):
+            return
+
+        salvaged_calc = self.extra[is_salvageable]
+        salvaged_obs = peak_obs_orig[closest_indices[is_salvageable]]
+
+        # Construct new wrong_intensity tuple
+        current_wi_calc, current_wi_obs = self.wrong_intensity
+        
+        new_wi_calc = np.concatenate([current_wi_calc, salvaged_calc])
+        new_wi_obs = np.concatenate([current_wi_obs, salvaged_obs])
+
+        # Set overrides
+        self._wrong_intensity_override = (new_wi_calc, new_wi_obs)
+        self._extra_override = self.extra[~is_salvageable]
+        
 
     def calculate_intensity_score(
         self,
@@ -364,21 +303,14 @@ class PeakMatcher:
         missing_coeff: float = 0,
         extra_coeff: float = 0,
     ) -> float:
-        """
-        Calculating score based on intensities.
-        """
         eps = 1e-12
-        
-        # 1. Calculate Phase Intensity (Total signal explained by this phase + errors)
         I_phase = I_matched + I_wrong_intensity + I_extra + eps
         
-        # 2. Calculate Ratios
         ratio_matched = I_matched / I_phase
         ratio_wrong_intensity = I_wrong_intensity / I_phase
         ratio_missing = I_missing / I_obs_total
-        ratio_extra = I_extra / I_obs_total
+        ratio_extra = I_extra / I_phase
 
-        # 3. Weighted Sum
         return (
             matched_coeff * ratio_matched
             + wrong_intensity_coeff * ratio_wrong_intensity
@@ -393,37 +325,24 @@ class PeakMatcher:
         missing_coeff: float = 0,
         extra_coeff: float = 0,
     ) -> float:
-        """
-        Wrapper: Extracts intensities from self and calls the engine.
-        """
-        # Extract existing match data
         matched_obs, matched_calc = self.matched
         wrong_intens_obs, wrong_intens_calc = self.wrong_intensity
         
         matched_peaks = min([matched_obs, matched_calc], key=lambda x: x[:, 1].sum()) if len(matched_obs) > 0 else np.empty((0, 2))
         wrong_intens_peaks = min([wrong_intens_obs, wrong_intens_calc], key=lambda x: x[:, 1].sum()) if len(wrong_intens_obs) > 0 else np.empty((0, 2))
         
-        # Sum intensities
         I_matched = np.sum(np.abs(matched_peaks[:, 1]))
         I_wrong = np.sum(np.abs(wrong_intens_peaks[:, 1]))
         I_missing = np.sum(np.abs(self.missing[:, 1]))
         I_extra = np.sum(np.abs(self.extra[:, 1]))
         I_obs_total = np.sum(np.abs(self.peak_obs[:, 1])) + 1e-12
 
-        # Delegate to the engine
         return self.calculate_intensity_score(
             I_matched, I_wrong, I_missing, I_extra, I_obs_total,
             matched_coeff, wrong_intensity_coeff, missing_coeff, extra_coeff
         )
-        
-    def jaccard_index(self) -> float:
-        """
-        Calculate the Jaccard index of the matching result.
 
-        Returns
-        -------
-            the Jaccard index of the matching result
-        """
+    def jaccard_index(self) -> float:
         matched_calc = self.matched[0]
         wrong_intens_calc = self.wrong_intensity[0]
         matched_obs = self.matched[1]
@@ -451,22 +370,6 @@ class PeakMatcher:
         min_angle_difference: float = 0.3,
         min_intensity_ratio: float = 0.005,
     ) -> np.ndarray:
-        """
-        Get the isolated missing/extra peaks in the `observed peaks`.
-
-        The isolated missing/extra peaks are the missing/extra peaks that are not close to any other
-        peaks in matched and wrong intensity peaks.
-
-        Args:
-            peak_type: the type of the peaks to consider, either "missing" or "extra"
-            min_angle_difference: the tolerance to consider a peak as close to another peak, default to 0.3 degree
-            min_intensity_ratio: the minimum ratio of the intensity to be considered as a peak, default to 0.005
-
-        Returns
-        -------
-            the isolated missing peaks with [position, intensity]
-        """
-        #print(f'DEBUG getting isolated peaks of type: {peak_type}')
         if peak_type == "missing":
             peaks = self.missing
             matched = self.matched[1]
@@ -488,12 +391,11 @@ class PeakMatcher:
             matched[:, 0].reshape(-1, 1),
             metric="cityblock",
         )
-        #print(f'DEBUG {peak_type} peak in get_isolated_peaks: {peaks}, in total {len(peaks)}')
-        #print(f'DEBUG matched peaks in get_isolated_peaks: {matched}, in total {len(matched)}')
-        #for match in matched:
-            #print(f'DEBUG matched observed peaks in get_isolated_peaks: {match}')
         distance = np.min(distance, axis=1)
         min_intensity = self.peak_obs[:, 1].max() * min_intensity_ratio
+        
+        print(f'DEBUG {peak_type} peaks: {peaks}')
+        print(f'DEBUG peak_obs_orig: {self.peak_obs}')
 
         return peaks[(distance > min_angle_difference) & (peaks[:, 1] > min_intensity)]
 
@@ -507,6 +409,10 @@ class PeakMatcher:
         extra_calc = self.extra
         matched_calc = self.matched[0]
         wrong_intensity_calc = self.wrong_intensity[0]
+
+        extra_calc = np.abs(extra_calc)
+        matched_calc = np.abs(matched_calc)
+        wrong_intensity_calc = np.abs(wrong_intensity_calc)
 
         extra_calc[:, 1] *= -1
         matched_calc[:, 1] *= -1
@@ -554,7 +460,6 @@ class PeakMatcher:
             label="wrong intens",
         )
 
-        # add a line y=0
         ax.axhline(0, color="black", lw=0.5)
         ax.set_xlabel("2theta")
         ax.set_ylabel("Intensity")

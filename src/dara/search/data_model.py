@@ -82,11 +82,12 @@ class SearchNodeData(BaseModel):
             else ""
         )
 
-    def get_peak_matcher(self, peak_obs: np.ndarray, *args, **kwargs) -> PeakMatcher:
+    def get_peak_matcher(self, peak_obs: np.ndarray, peak_obs_orig: np.ndarray, *args, **kwargs) -> PeakMatcher:
         return PeakMatcher(
             *args,
             peak_obs=peak_obs,
             peak_calc=self.current_result.peak_data[["2theta", "intensity"]].values,
+            peak_obs_orig=peak_obs_orig,
             **kwargs,
         )
 

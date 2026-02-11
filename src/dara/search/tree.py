@@ -78,15 +78,15 @@ def remote_do_refinement_no_saving(
 
 @ray.remote(num_cpus=1)
 def remote_peak_matching(
-    batch: list[tuple[np.ndarray, np.ndarray]],
+    batch: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
     return_type: Literal["PeakMatcher", "score", "jaccard"],
     score_coefficients: dict[str, float] | None = None,
 ) -> list[PeakMatcher | float]:
     results = []
 
-    for peak_calc, peak_obs in batch:
+    for peak_calc, peak_obs, peak_obs_orig in batch:
         #print(f'DEBUG remote peak matching')
-        pm = PeakMatcher(peak_calc, peak_obs)
+        pm = PeakMatcher(peak_calc, peak_obs, peak_obs_orig)
 
         if return_type == "PeakMatcher":
             results.append(pm)
@@ -106,6 +106,7 @@ def remote_peak_matching(
 def batch_peak_matching(
     peak_calcs: list[np.ndarray],
     peak_obs: np.ndarray | list[np.ndarray],
+    peak_obs_orig: np.ndarray | list[np.ndarray] | None = None,
     return_type: Literal["PeakMatcher", "score", "jaccard"] = "PeakMatcher",
     batch_size: int = 100,
     score_coefficients: dict[str, float] | None = None,
@@ -115,8 +116,15 @@ def batch_peak_matching(
 
     if len(peak_calcs) != len(peak_obs):
         raise ValueError("Length of peak_calcs and peak_obs must be the same.")
+    
+    if peak_obs_orig is None:
+        orig_obs_list = [None] * len(peak_calcs)
+    elif isinstance(peak_obs_orig, np.ndarray):
+        orig_obs_list = [peak_obs_orig] * len(peak_calcs)
+    else:
+        orig_obs_list = peak_obs_orig
 
-    all_data = list(zip_longest(peak_calcs, peak_obs, fillvalue=None))
+    all_data = list(zip_longest(peak_calcs, peak_obs, orig_obs_list, fillvalue=None))
     batches = [
         all_data[i : i + batch_size] for i in range(0, len(all_data), batch_size)
     ]
@@ -463,7 +471,7 @@ class BaseSearchTree(Tree):
         #print(f'DEBUG max_false_peak_intensity: {max_false_peak_intensity}, number of false peaks: {len(isolated_missing_peaks) + len(isolated_extra_peaks)}')
 
         if max_false_peak_intensity < self.false_peak_threshold and \
-                len(isolated_missing_peaks) + len(isolated_extra_peaks) <= 3 and \
+                len(isolated_missing_peaks) + len(isolated_extra_peaks) <= 5 and \
                 new_result.lst_data.rpb < 20.0:
             return True
         return False
@@ -519,17 +527,17 @@ class BaseSearchTree(Tree):
                 all_phases_result, node.data.current_result, self.score_coefficients
             )
             
-            for phase, score in raw_scores.items():
-                print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
+            #for phase, score in raw_scores.items():
+            #    print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
                 
-            for phase, score in scores.items():
-                print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
+            #for phase, score in scores.items():
+            #    print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
             
-            for phase, score in best_phases.items():
-                print(f'DEBUG best phases {phase.path.stem} score = {score}')
+            #for phase, score in best_phases.items():
+            #    print(f'DEBUG best phases {phase.path.stem} score = {score}')
 
-            print(f'DEBUG : threshold = {threshold}')
-            print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
+            #print(f'DEBUG : threshold = {threshold}')
+            #print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
 
             if self.record_peak_matcher_scores:
                 node.data.peak_matcher_scores = scores
@@ -615,31 +623,14 @@ class BaseSearchTree(Tree):
                 
 
                 if new_result is not None:
-                    #print(f'DEBUG expand node for new phases {[p.path.stem for p in new_phases]} with Rpb {new_result.lst_data.rpb}')
                     peak_matcher = PeakMatcher(
                         new_result.peak_data[["2theta", "intensity"]].values,
                         self.peak_obs,
                     )
-                    isolated_missing_peaks = peak_matcher.get_isolated_peaks(peak_type="missing")
+                    
+                    isolated_missing_peaks = peak_matcher.get_isolated_peaks(peak_type="missing")                    
                     isolated_extra_peaks = peak_matcher.get_isolated_peaks(peak_type="extra")
 
-                    if memory_2thetas is not None and len(isolated_extra_peaks) > 0:
-                        validated_extra_peaks = []
-                        for extra_peak in isolated_extra_peaks:
-                            # Check overlap against Parent's result (The "Memory")
-                            # We use the parent's peaks because we know they are valid/accepted.
-                            overlap_found = np.any(
-                                np.abs(extra_peak[0] - memory_2thetas) < self.angle_tolerance
-                            )
-                            
-                            if overlap_found:
-                                logger.debug(f"Peak at {extra_peak[0]:.2f} classified as 'Overlap' instead of 'Extra'")
-                                continue  # It is an overlap, not a defect. Skip it.
-                            
-                            validated_extra_peaks.append(extra_peak)
-                        
-                        isolated_extra_peaks = np.array(validated_extra_peaks)
-                    
                 else:
                     isolated_missing_peaks = []
                     isolated_extra_peaks = []
@@ -669,7 +660,7 @@ class BaseSearchTree(Tree):
                 elif (len(remove_unnecessary_phases(
                             new_result,
                             [p.path for p in new_phases],
-                            self.rpb_threshold,
+                            self.rpb_threshold * 0.75,
                             protected_phase=phase.path.stem 
                         )) != len(new_phases) and len(new_phases) > 1):
                     status = "overfitting"
@@ -893,81 +884,86 @@ class BaseSearchTree(Tree):
         current_result: RefinementResult | None = None,
         score_coefficients: dict[str, float] | None = None,
     ) -> tuple[dict[RefinementPhase, float], dict[RefinementPhase, list[float]], dict[RefinementPhase, list[float]], float]:
-        
-        # 1. Setup Residual (What is missing?)
+
+        # 1. Setup Residual (Target for matching)
         if current_result is None:
             missing_peaks = self.peak_obs
-            # If no current result (first iteration), there is no 'memory' to check against
-            ref_peaks = None 
         else:
-            res_matcher = PeakMatcher(current_result.peak_data[["2theta", "intensity"]].values, self.peak_obs)
+            res_matcher = PeakMatcher(
+                current_result.peak_data[["2theta", "intensity"]].values, 
+                self.peak_obs,
+                peak_obs_orig=self.peak_obs
+            )
             missing_peaks = res_matcher.missing
-            # MEMORY SOURCE: The peaks of phases we have already accepted
-            ref_peaks = current_result.peak_data[["2theta", "intensity"]].values
 
         if len(missing_peaks) == 0: return {}, {}, {}, 0
 
+        # 2. Prepare Data
+        phases_list = list(all_phases_result.keys())
+        
+        # List 1: Candidates (Calculated)
+        cands_data = [
+            res.peak_data[["2theta", "intensity"]].values 
+            for res in all_phases_result.values()
+        ]
+
+        # List 2: Residuals (Observed Target) - Replicated
+        residuals_list = [missing_peaks] * len(cands_data)
+
+        # List 3: Original Data (Context for Salvage) - Replicated
+        originals_list = [self.peak_obs] * len(cands_data)
+
+        # 3. Batch Match (CORRECTED CALL)
+        # We pass the 3 lists separately.
+        matchers_list = batch_peak_matching(
+            cands_data,       
+            residuals_list,   
+            originals_list,   
+            return_type="PeakMatcher"
+        )
+        
+        scores = {}
+        raw_scores = {}
         coeffs = score_coefficients or {}
         I_obs_total = np.sum(np.abs(self.peak_obs[:, 1])) + 1e-12
 
-        # 2. Batch Match against Residual
-        cands_data = [res.peak_data[res.peak_data["phase"] == p.path.stem][["2theta", "intensity"]].values 
-                      for p, res in all_phases_result.items()]
-                
-        matchers = dict(zip(all_phases_result.keys(), 
-                            batch_peak_matching(cands_data, missing_peaks, return_type="PeakMatcher")))
-
-        scores, raw_scores = {}, {}
-
-        for phase, m in matchers.items():
-            if m is None: 
-                scores[phase] = 0
+        # 4. Calculate Scores
+        for phase, m in zip(phases_list, matchers_list):
+            if m is None:
+                scores[phase] = 0.0
                 continue
-
+            
+            # Extract metrics directly from the matcher
+            # (Note: m.matched and m.wrong_intensity are tuples of (calc, obs))
             m_obs, m_calc = m.matched
             w_obs, w_calc = m.wrong_intensity
-
-            print(f'DEBUG phase {phase.path.stem} matched peaks: {m_obs}, {m_calc}')
-            print(f'DEBUG phase {phase.path.stem} wrong intensity peaks: {w_obs}, {w_calc}')
-            print(f'DEBUG phase {phase.path.stem} missing peaks: {m.missing}')
-            print(f'DEBUG phase {phase.path.stem} extra peaks: {m.extra}')
             
-            I_matched = np.sum(np.abs(min([m_obs, m_calc], key=lambda x: x[:, 1].sum())[:, 1])) if len(m_obs) > 0 else 0
-            I_wrong_intensity = np.sum(np.abs(min([w_obs, w_calc], key=lambda x: x[:, 1].sum())[:, 1])) if len(w_obs) > 0 else 0
+            # Calculate intensities (using conservative min approach)
+            I_matched = np.sum(np.abs(min([m_obs, m_calc], key=lambda x: np.sum(x[:,1]))[:, 1])) if len(m_obs) > 0 else 0
+            I_wrong_intensity = np.sum(np.abs(min([w_obs, w_calc], key=lambda x: np.sum(x[:,1]))[:, 1])) if len(w_obs) > 0 else 0
             I_missing = np.sum(np.abs(m.missing[:, 1]))
             I_extra = np.sum(np.abs(m.extra[:, 1]))
-            
-            # If we have a current result, check if Extra peaks are actually overlapping
-            if ref_peaks is not None:
-                # Match candidate peaks against the Previous Refined Phases
-                m_overlap = PeakMatcher(m.peak_calc, ref_peaks, angle_tolerance=self.angle_tolerance)
-                
-                # Accept overlaps regardless of intensity
-                overlap_hits = set(m_overlap.matched_indices_calc) | set(m_overlap.wrong_intensity_indices_calc)
-                extra_indices = set(m.extra_indices_calc)           
-                salvage_indices = list(extra_indices & overlap_hits)
-                 
-                if salvage_indices:
-                    I_salvaged = np.sum(np.abs(m.peak_calc[salvage_indices, 1]))
-                    I_wrong_intensity += I_salvaged
-                    I_extra -= I_salvaged
-                    if I_extra < 0: I_extra = 0
 
             scores[phase] = m.calculate_intensity_score(
-                I_matched, I_wrong_intensity, I_missing, I_extra, I_obs_total, **coeffs
+               I_matched, I_wrong_intensity, I_missing, I_extra, I_obs_total, **coeffs
             )
+            
             raw_scores[phase] = [float(I_matched), float(I_wrong_intensity), float(I_missing), float(I_extra)]
 
-        # 3. Thresholding
+        # 5. Thresholding & Sorting
         threshold, _ = find_optimal_score_threshold(list(scores.values()))
         threshold = max(threshold, 0)
-        if len(all_phases_result) <= 6:  
-            threshold = min(threshold, 0.60)  # Cap the threshold to avoid too strict filtering
         
+        if len(all_phases_result) <= 6:
+            threshold = min(threshold, 0.60)
+
         filtered = {p: s for p, s in scores.items() if s >= threshold and s > 0}
-        sorted_results = dict(sorted(filtered.items(), 
-                                     key=lambda x: x[1] * np.log1p(len(all_phases_result[x[0]].peak_data)), 
-                                     reverse=True))
+        
+        sorted_results = dict(sorted(
+            filtered.items(), 
+            key=lambda x: x[1] * np.log1p(len(all_phases_result[x[0]].peak_data)), 
+            reverse=True
+        ))
 
         return sorted_results, scores, raw_scores, threshold
     
@@ -981,7 +977,7 @@ class BaseSearchTree(Tree):
 
         Args:
             phases: the phases
-            pinned_phases: the pinned phases theta will be included in all the refinement
+            pinned_phases: the pinned phases that will be included in all the refinement
 
         Returns
         -------
@@ -1194,7 +1190,7 @@ class SearchTree(BaseSearchTree):
 
         self.intensity_threshold = min(
             find_optimal_intensity_threshold(self.peak_obs[:, 1]),
-            0.01 * np.max(self.peak_obs[:, 1]),
+            0.1 * np.max(self.peak_obs[:, 1]),
         )
         logger.info(
             f"The intensity threshold is automatically set "
@@ -1283,14 +1279,13 @@ class SearchTree(BaseSearchTree):
             show_progress=False,
             nthreads=os.cpu_count(),
         )
-        print(f"DEBUG Detected {len(peak_list)} peaks in the pattern.")
-        print(f"DEBUG whole peak list: {peak_list[['2theta', 'intensity']].values}")
         time_end = time.time()
         #print(f"DEBUG Peak detection took {time_end - time_start:.2f} seconds.")
         if len(peak_list) == 0:
             raise ValueError("No peaks are detected in the pattern.")
 
         peak_list_array = peak_list[["2theta", "intensity"]].values
+        print(f"DEBUG peak detection: {peak_list_array}")
 
         if self.enable_angular_cut:
             optimal_wmax = get_optimal_max_two_theta(peak_list)
