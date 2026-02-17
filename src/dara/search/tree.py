@@ -16,6 +16,7 @@ import pandas as pd
 import ray
 from sklearn.cluster import AgglomerativeClustering
 from treelib import Node, Tree
+from collections import defaultdict
 
 from dara import do_refinement_no_saving
 from dara.cif2str import CIF2StrError
@@ -94,7 +95,8 @@ def remote_peak_matching(
             results.append(pm.score(matched_coeff=score_coefficients.get('matched_coeff', 1.0) if score_coefficients else 1.0,
                                     wrong_intensity_coeff=score_coefficients.get('wrong_intensity_coeff', 0.0) if score_coefficients else 0.0,
                                     missing_coeff=score_coefficients.get('missing_coeff', 0) if score_coefficients else 0,
-                                    extra_coeff=score_coefficients.get('extra_coeff', 0) if score_coefficients else 0))
+                                    extra_coeff=score_coefficients.get('extra_coeff', 0) if score_coefficients else 0,
+                                    overlap_coeff=score_coefficients.get('overlap_coeff', 0) if score_coefficients else 0))
         elif return_type == "jaccard":
             results.append(pm.jaccard_index())
         else:
@@ -310,8 +312,8 @@ def group_phases(
 def remove_unnecessary_phases(
     result: RefinementResult, 
     cif_paths: list[Path], 
-    rpb_threshold: float = 0.0,
-    protected_phase: str | None = None
+    overfitting_threshold: float = 2.0,
+    protected_phases: list[str] | None = None
 ) -> list[Path]:
     
     phases_results = {k: np.array(v) for k, v in result.plot_data.structs.items()}
@@ -323,20 +325,20 @@ def remove_unnecessary_phases(
     original_rpb = rpb(y_calc, y_obs, y_bkg)
     
     new_phases = []
-    #print(f"DEBUG checking unnecessary phases {list(phases_results.keys())}")
+    print(f"DEBUG checking unnecessary phases {list(phases_results.keys())}")
 
     for excluded_phase in phases_results:
         # If this is the newly added phase, keep it automatically
-        if protected_phase and excluded_phase == protected_phase:
+        if protected_phases and excluded_phase in protected_phases:
             new_phases.append(cif_paths_dict[excluded_phase])
             continue
 
         y_calc_excl = y_calc.copy()
         y_calc_excl -= phases_results[excluded_phase]
         new_rpb = rpb(y_calc_excl, y_obs, y_bkg)
-        #print(f"DEBUG Removing phase {excluded_phase}: original RPB = {original_rpb}, new RPB = {new_rpb}")
+        print(f"DEBUG Removing phase {excluded_phase}: original RPB = {original_rpb}, new RPB = {new_rpb}")
 
-        if new_rpb > original_rpb + rpb_threshold:
+        if new_rpb > original_rpb + overfitting_threshold:
             new_phases.append(cif_paths_dict[excluded_phase])
 
     return new_phases
@@ -366,8 +368,8 @@ def get_natural_break_results(
         ]
         all_rhos = [result.refinement_result.lst_data.rho for result in results]
     if sorting:
-        #results = sorted(results, key=lambda x: x.refinement_result.lst_data.rwp)
-        results = sorted(results, key=lambda x: x.refinement_result.lst_data.rwp + 1.5 * len(x.phases))
+        results = sorted(results, key=lambda x: x.refinement_result.lst_data.rwp)
+        #results = sorted(results, key=lambda x: x.refinement_result.lst_data.rwp + 1.5 * len(x.phases))
 
     return results
 
@@ -387,6 +389,7 @@ class BaseSearchTree(Tree):
         maximum_grouping_distance: the maximum grouping distance, default to 0.1
         max_phases: the maximum number of phases
         rpb_threshold: the minimum RPB improvement in each step
+        overfitting_threshold: the overfitting threshold
         pinned_phases: the phases that are pinned and will be included in all the results
         score_coefficients: the coefficients for the peak match score calculation
         early_stopping: whether to enable early stopping
@@ -406,12 +409,14 @@ class BaseSearchTree(Tree):
         maximum_grouping_distance: float,
         max_phases: float,
         rpb_threshold: float = 2.0,
+        overfitting_threshold: float = 2.0,
         false_peak_threshold: float = 0.05,
         strain_threshold: float = 0.02,
         pinned_phases: list[RefinementPhase] | None = None,
         record_peak_matcher_scores: bool = False,
         score_coefficients: dict[str, float] | None = None,
         early_stopping: bool = False,
+        phase_strikes: dict | None = None,
         *args,
         **kwargs,
     ):
@@ -419,6 +424,7 @@ class BaseSearchTree(Tree):
 
         self.pattern_path = pattern_path
         self.rpb_threshold = rpb_threshold
+        self.overfitting_threshold = overfitting_threshold
         self.strain_threshold = strain_threshold
         self.refinement_params = refine_params if refine_params is not None else {}
         self.phase_params = phase_params if phase_params is not None else {}
@@ -435,6 +441,7 @@ class BaseSearchTree(Tree):
         self.false_peak_threshold = false_peak_threshold
 
         self.all_phases_result = all_phases_result
+        self.phase_strikes = phase_strikes if phase_strikes is not None else defaultdict(int)
         self.peak_obs = peak_obs
         self.angle_tolerance = DEFAULT_ANGLE_TOLERANCE
 
@@ -476,7 +483,7 @@ class BaseSearchTree(Tree):
             return True
         return False
 
-    def expand_node(self, nid: str, stop_flag=None, registry=None) -> list[str]:
+    def expand_node(self, nid: str, stop_flag=None, combination_registry=None, strike_registry=None) -> list[str]:
         """
         Expand a node in the search tree.
 
@@ -502,15 +509,10 @@ class BaseSearchTree(Tree):
             # Get the Parent Node and its result as memory
             parent_node = self.get_node(nid)
             parent_result = parent_node.data.current_result
-            
-            # Extract the memory peaks once (if they exist)
-            memory_2thetas = None
-            if parent_result is not None:
-                memory_2thetas = parent_result.peak_data["2theta"].values
-                
+                            
             # remove phases that are already in the current result
             current_phases_set = set(node.data.current_phases)
-            #print(f'DEBUG current phases set: {[p.path.stem for p in current_phases_set]}')
+            print(f'DEBUG current phases set: {[p.path.stem for p in current_phases_set]}')
             all_phases_result = {
                 phase: result
                 for phase, result in self.all_phases_result.items()
@@ -524,20 +526,35 @@ class BaseSearchTree(Tree):
                 return self.get_expandable_children(nid)
             
             best_phases, scores, raw_scores, threshold = self.score_phases(
-                all_phases_result, node.data.current_result, self.score_coefficients
+                all_phases_result, 
+                node.data.current_result, 
+                self.score_coefficients
             )
             
-            #for phase, score in raw_scores.items():
-            #    print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
+            # If root node, keep only top-k to avoid combinatorial explosion
+            if nid == self.root:
+                TOP_K = 5
+                best_score = max(best_phases.values()) if best_phases else 0
+                kept_phases = {}
+                for i, (phase, score) in enumerate(best_phases.items()):
+                    if i < TOP_K:
+                        kept_phases[phase] = score
+                    elif score >= (best_score * 0.98):
+                        kept_phases[phase] = score
                 
-            #for phase, score in scores.items():
-            #    print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
+                if len(best_phases) > len(kept_phases):
+                    logger.info(f"ROOT PRUNING: Reduced candidates from {len(best_phases)} to {len(kept_phases)} (Top-{TOP_K}).")
+                    best_phases = kept_phases
             
-            #for phase, score in best_phases.items():
-            #    print(f'DEBUG best phases {phase.path.stem} score = {score}')
+            for phase, score in raw_scores.items():
+                print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
+            for phase, score in scores.items():
+                print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
+            for phase, score in best_phases.items():
+                print(f'DEBUG best phases {phase.path.stem} score = {score}')
 
-            #print(f'DEBUG : threshold = {threshold}')
-            #print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
+            print(f'DEBUG : threshold = {threshold}')
+            print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
 
             if self.record_peak_matcher_scores:
                 node.data.peak_matcher_scores = scores
@@ -548,7 +565,15 @@ class BaseSearchTree(Tree):
             
             # We collect the reservations we need to make first to batch the remote call 
             for phase, score in best_phases.items():
+                print(f'DEBUG evaluating phase {phase.path.stem} with preliminary score {score}')
                 potential_phases = [*node.data.current_phases, phase]
+                phase_names = [p.path.stem for p in potential_phases]
+
+                if strike_registry is not None:
+                    # Check if any phase in this potential combination is struck out
+                    if ray.get(strike_registry.check_strikes.remote(phase_names)):
+                        print(f"Skipping phase combination {[p.path.stem for p in potential_phases]} due to strikes.")
+                        continue
                 
                 # 1. Local Check
                 duplicate_id = self.find_duplicate_node(potential_phases)
@@ -556,16 +581,14 @@ class BaseSearchTree(Tree):
                     continue # Skip silently
                 
                 # 2. Remote Check
-                if registry is not None:
-                    # Convert objects to string names for the registry
-                    phase_names = [p.path.stem for p in potential_phases]
-                    is_reserved = ray.get(registry.try_reserve.remote(phase_names))
+                if combination_registry is not None:
+                    is_reserved = ray.get(combination_registry.try_reserve.remote(phase_names))
                     if not is_reserved:
                         logger.info(f"Race condition avoided: {[p.path.stem for p in potential_phases]} "
                                     f"is already being processed by another worker.")
                         continue
 
-                # If we pass both checks, we are the first! Proceed.
+                # If we pass all checks, we are the first! Proceed.
                 final_candidates[phase] = score
 
             # Replace 'best_phases' with 'final_candidates' for the expensive refinement
@@ -627,6 +650,9 @@ class BaseSearchTree(Tree):
                         new_result.peak_data[["2theta", "intensity"]].values,
                         self.peak_obs,
                     )
+                    print(f'DEBUG new result phases: {phase.path.stem}')
+                    print(f'DEBUG new_result.peak_data: {new_result.peak_data[["2theta", "intensity"]] if new_result is not None else None}')
+                    print(f'DEBUG observed peaks: {self.peak_obs}')
                     
                     isolated_missing_peaks = peak_matcher.get_isolated_peaks(peak_type="missing")                    
                     isolated_extra_peaks = peak_matcher.get_isolated_peaks(peak_type="extra")
@@ -640,7 +666,7 @@ class BaseSearchTree(Tree):
                 #print(f'DEBUG new phases: {[p.path.stem for p in new_phases]}')
                 #print(f'DEBUG new_result rpb: {new_result.lst_data.rpb if new_result is not None else None}')
 
-                parent_isolated_extra_peaks = node.data.isolated_extra_peaks if node.data.isolated_extra_peaks is not None else []
+                #parent_isolated_extra_peaks = node.data.isolated_extra_peaks if node.data.isolated_extra_peaks is not None else []
 
                 if new_result is None:
                     status = "error"  
@@ -657,11 +683,12 @@ class BaseSearchTree(Tree):
 
                 # TODO if overfitting is detected for the 2nd layer node, then it might be worth it to permanantly remove the parent node
                 # If removing one phase does not improve the result, this indicats overfitting
+                # Skip removing last refined phase and phases with smallest intensity
                 elif (len(remove_unnecessary_phases(
                             new_result,
                             [p.path for p in new_phases],
-                            self.rpb_threshold * 0.75,
-                            protected_phase=phase.path.stem 
+                            self.overfitting_threshold,
+                            protected_phases=[phase.path.stem]
                         )) != len(new_phases) and len(new_phases) > 1):
                     status = "overfitting"
                     self.create_node(
@@ -781,9 +808,9 @@ class BaseSearchTree(Tree):
             if self.get_node(child.identifier).data.status == "pending"
         ]
 
-    def expand_root(self, stop_flag=None, registry=None) -> list[str]:
+    def expand_root(self, stop_flag=None, combination_registry=None, strike_registry=None) -> list[str]:
         """Expand the root node."""
-        return self.expand_node(self.root, stop_flag=stop_flag, registry=registry)
+        return self.expand_node(self.root, stop_flag=stop_flag, combination_registry=combination_registry, strike_registry=strike_registry)
 
     def get_all_possible_nodes_at_same_level(self, node: Node) -> tuple[Node, ...]:
         """
@@ -882,21 +909,27 @@ class BaseSearchTree(Tree):
         self,
         all_phases_result: dict[RefinementPhase, SearchResult],
         current_result: RefinementResult | None = None,
-        score_coefficients: dict[str, float] | None = None,
+        score_coefficients: dict[str, float] | None = None
     ) -> tuple[dict[RefinementPhase, float], dict[RefinementPhase, list[float]], dict[RefinementPhase, list[float]], float]:
-
+        
         # 1. Setup Residual (Target for matching)
         if current_result is None:
-            missing_peaks = self.peak_obs
+            residual_peaks = self.peak_obs
         else:
+            # We still need a matcher here to determine the residuals relative to the current result
+            print('DEBUG getting residual peaks for current result...')
             res_matcher = PeakMatcher(
                 current_result.peak_data[["2theta", "intensity"]].values, 
                 self.peak_obs,
                 peak_obs_orig=self.peak_obs
             )
-            missing_peaks = res_matcher.missing
+            residual_peaks = res_matcher.missing
+            
+            #for missing_peak in missing_peaks:
+            #    print(f'DEBUG RESIDUAL missing_peak peak: {missing_peak}')
 
-        if len(missing_peaks) == 0: return {}, {}, {}, 0
+        if len(residual_peaks) == 0: 
+            return {}, {}, {}, 0.0
 
         # 2. Prepare Data
         phases_list = list(all_phases_result.keys())
@@ -908,49 +941,56 @@ class BaseSearchTree(Tree):
         ]
 
         # List 2: Residuals (Observed Target) - Replicated
-        residuals_list = [missing_peaks] * len(cands_data)
+        residuals_list = [residual_peaks] * len(cands_data)
 
-        # List 3: Original Data (Context for Salvage) - Replicated
+        # List 3: Original Data (Context for Overlap) - Replicated
         originals_list = [self.peak_obs] * len(cands_data)
 
-        # 3. Batch Match (CORRECTED CALL)
-        # We pass the 3 lists separately.
-        matchers_list = batch_peak_matching(
-            cands_data,       
-            residuals_list,   
-            originals_list,   
-            return_type="PeakMatcher"
-        )
-        
+        coeffs = score_coefficients or {}
         scores = {}
         raw_scores = {}
-        coeffs = score_coefficients or {}
-        I_obs_total = np.sum(np.abs(self.peak_obs[:, 1])) + 1e-12
 
-        # 4. Calculate Scores
-        for phase, m in zip(phases_list, matchers_list):
-            if m is None:
-                scores[phase] = 0.0
-                continue
-            
-            # Extract metrics directly from the matcher
-            # (Note: m.matched and m.wrong_intensity are tuples of (calc, obs))
-            m_obs, m_calc = m.matched
-            w_obs, w_calc = m.wrong_intensity
-            
-            # Calculate intensities (using conservative min approach)
-            I_matched = np.sum(np.abs(min([m_obs, m_calc], key=lambda x: np.sum(x[:,1]))[:, 1])) if len(m_obs) > 0 else 0
-            I_wrong_intensity = np.sum(np.abs(min([w_obs, w_calc], key=lambda x: np.sum(x[:,1]))[:, 1])) if len(w_obs) > 0 else 0
-            I_missing = np.sum(np.abs(m.missing[:, 1]))
-            I_extra = np.sum(np.abs(m.extra[:, 1]))
+        # 3. Batch Match (Conditional Logic)
+        if self.record_peak_matcher_scores:
+            # Slow Path: Fetch full PeakMatcher objects to extract detailed breakdown
+            matchers_list = batch_peak_matching(
+                cands_data,       
+                residuals_list,   
+                originals_list,   
+                return_type="PeakMatcher"
+            )
 
-            scores[phase] = m.calculate_intensity_score(
-               I_matched, I_wrong_intensity, I_missing, I_extra, I_obs_total, **coeffs
+            for phase, m in zip(phases_list, matchers_list):
+                if m is None:
+                    scores[phase] = 0.0
+                    continue
+
+                # Calculate the main weighted score using the provided coefficients (including overlap)
+                scores[phase] = m.score(**coeffs)
+
+                # Extract raw breakdown (Now includes Overlap as 5th element)
+                raw_scores[phase] = [
+                    m.score(matched_coeff=1, wrong_intensity_coeff=0, missing_coeff=0, extra_coeff=0, overlap_coeff=0),
+                    m.score(matched_coeff=0, wrong_intensity_coeff=1, missing_coeff=0, extra_coeff=0, overlap_coeff=0),
+                    m.score(matched_coeff=0, wrong_intensity_coeff=0, missing_coeff=1, extra_coeff=0, overlap_coeff=0),
+                    m.score(matched_coeff=0, wrong_intensity_coeff=0, missing_coeff=0, extra_coeff=1, overlap_coeff=0),
+                    m.score(matched_coeff=0, wrong_intensity_coeff=0, missing_coeff=0, extra_coeff=0, overlap_coeff=1),
+                ]
+
+        else:
+            # Fast Path: Workers calculate the final score directly (Intensity + Overlap)
+            scores_list = batch_peak_matching(
+                cands_data,       
+                residuals_list,   
+                originals_list,   
+                return_type="score",
+                score_coefficients=coeffs 
             )
             
-            raw_scores[phase] = [float(I_matched), float(I_wrong_intensity), float(I_missing), float(I_extra)]
-
-        # 5. Thresholding & Sorting
+            for phase, score in zip(phases_list, scores_list):
+                scores[phase] = float(score) if score is not None else 0.0
+            
+        # 4. Thresholding & Sorting
         threshold, _ = find_optimal_score_threshold(list(scores.values()))
         threshold = max(threshold, 0)
         
@@ -1019,6 +1059,7 @@ class BaseSearchTree(Tree):
             all_phases_result=self.all_phases_result,
             peak_obs=self.peak_obs,
             rpb_threshold=self.rpb_threshold,
+            overfitting_threshold=self.overfitting_threshold,
             strain_threshold=self.strain_threshold,
             false_peak_threshold=self.false_peak_threshold,
             refine_params=self.refinement_params,
@@ -1031,6 +1072,7 @@ class BaseSearchTree(Tree):
             express_mode=self.express_mode,
             early_stopping=self.early_stopping,
             record_peak_matcher_scores=self.record_peak_matcher_scores,
+            phase_strikes=self.phase_strikes,
         )
 
     @classmethod
@@ -1066,6 +1108,7 @@ class BaseSearchTree(Tree):
             maximum_grouping_distance=search_tree.maximum_grouping_distance,
             max_phases=search_tree.max_phases,
             rpb_threshold=search_tree.rpb_threshold,
+            overfitting_threshold=search_tree.overfitting_threshold,
             false_peak_threshold=search_tree.false_peak_threshold,
             strain_threshold=search_tree.strain_threshold,
             record_peak_matcher_scores=search_tree.record_peak_matcher_scores,
@@ -1115,6 +1158,7 @@ class SearchTree(BaseSearchTree):
         maximum_grouping_distance: the maximum grouping distance, default to 0.1
         max_phases: the maximum number of phases, note that the pinned phases are COUNTED as well
         rpb_threshold: the minimium Rpb improvement for the search tree to continue to expand one node.
+        overfitting_threshold: the threshold for removing unnecessary phases to prevent overfitting, default to 0.05
         strain_threshold: the maximum lattice strain allowed for a phase to be considered in the search
         record_peak_matcher_scores: whether to record the peak matcher scores for each phase at each node
         score_coefficients: the coefficients for the peak match score calculation
@@ -1135,7 +1179,8 @@ class SearchTree(BaseSearchTree):
         enable_angular_cut: bool = True,
         maximum_grouping_distance: float = 0.1,
         max_phases: float = 5,
-        rpb_threshold: float = 4,
+        rpb_threshold: float = 2.0,
+        overfitting_threshold: float = 2.0,
         false_peak_threshold: float = 0.05,
         strain_threshold: float = 0.02,
         record_peak_matcher_scores: bool = False,
@@ -1175,6 +1220,7 @@ class SearchTree(BaseSearchTree):
             maximum_grouping_distance,
             max_phases,
             rpb_threshold,
+            overfitting_threshold,
             false_peak_threshold,
             strain_threshold,
             self.pinned_phases,
@@ -1285,7 +1331,7 @@ class SearchTree(BaseSearchTree):
             raise ValueError("No peaks are detected in the pattern.")
 
         peak_list_array = peak_list[["2theta", "intensity"]].values
-        print(f"DEBUG peak detection: {peak_list_array}")
+        #print(f"DEBUG peak detection: {peak_list_array}")
 
         if self.enable_angular_cut:
             optimal_wmax = get_optimal_max_two_theta(peak_list)

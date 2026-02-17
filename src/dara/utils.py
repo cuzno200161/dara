@@ -415,7 +415,8 @@ def find_optimal_score_threshold(
     scores = np.array(scores)
     
     # Filter: Only include phases with score < 0.95
-    valid_scores = scores[scores < 0.95]
+    #valid_scores = scores[scores < 0.95]
+    valid_scores = scores
 
     # Check: If there are too few phases (e.g., less than 5), use default threshold
     if len(valid_scores) < 5:

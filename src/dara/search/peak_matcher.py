@@ -3,7 +3,7 @@ from typing import Any, Literal, Optional
 import numpy as np
 from scipy.spatial.distance import cdist
 
-DEFAULT_ANGLE_TOLERANCE = 0.3  # maximum difference in angle
+DEFAULT_ANGLE_TOLERANCE = 0.2  # maximum difference in angle
 DEFAULT_INTENSITY_TOLERANCE = 2  # maximum ratio of the intensities
 # maximum ratio of the intensities to be considered as missing instead of wrong intensity
 DEFAULT_MAX_INTENSITY_TOLERANCE = 5
@@ -50,21 +50,24 @@ def find_best_match(
             "matched": np.array([]).reshape(-1, 2),
             "extra": np.arange(len(peak_calc)),
             "wrong_intensity": np.array([]).reshape(-1, 2),
-            "residual_peaks": np.array([]).reshape(-1, 2),
         }
+        
+    # Nothing has been calculated yet
     if len(peak_calc) == 0:
         return {
             "missing": np.arange(len(peak_obs)),
             "matched": np.array([]).reshape(-1, 2),
-            "extra": np.array([]).reshape(-1, 2),
+            "extra": np.array([]).reshape(-1),
             "wrong_intensity": np.array([]).reshape(-1, 2),
-            "residual_peaks": peak_obs.copy(),
         }
 
     residual_peak_obs = peak_obs.copy()
     
     # Process calculated peaks (sorted by intensity descending)
     sorted_indices = np.argsort(peak_calc[:, 1])[::-1]
+    
+    #for peak in peak_calc:
+    #    print(f'DEBUG peak_calc: {peak}')
     
     for peak_idx in sorted_indices:
         peak = peak_calc[peak_idx]
@@ -83,10 +86,11 @@ def find_best_match(
         )
         best_match_idx = all_close_obs_peaks_idx[best_match_sub_idx]
 
+        # at this point, so long as angle difference is low, peaks are counted as match 
         matched.append((peak_idx, best_match_idx))
         
-        # Consuming intensity
-        obs_I_before = residual_peak_obs[best_match_idx, 1]
+        # Substracting observed residual intensity with the calculated peak intensity
+        #obs_I_before = residual_peak_obs[best_match_idx, 1]
         residual_peak_obs[best_match_idx, 1] -= peak[1]
 
     all_assigned = {m[1] for m in matched}
@@ -94,21 +98,18 @@ def find_best_match(
 
     to_be_deleted = set()
     for i in range(len(matched)):
-        calc_idx = matched[i][0]
-        obs_idx = matched[i][1]
-        
+        peak_idx = matched[i][1]
         peak_intensity_diff = absolute_log_error(
-            peak_obs[obs_idx][1],
-            peak_obs[obs_idx][1] - residual_peak_obs[obs_idx][1],
+            peak_obs[peak_idx][1],
+            peak_obs[peak_idx][1] - residual_peak_obs[peak_idx][1],
         )
-
-        if peak_intensity_diff > np.log(intensity_tolerance):
+        
+        if peak_intensity_diff > np.log(max_intensity_tolerance):
+            missing.append(peak_idx)
+            extra.append(matched[i][0])
+            to_be_deleted.add(i)
+        elif peak_intensity_diff > np.log(intensity_tolerance):
             wrong_intens.append(matched[i])
-            to_be_deleted.add(i)
-
-        if -peak_intensity_diff > np.log(max_intensity_tolerance):
-            missing.append(obs_idx)
-            to_be_deleted.add(i)
 
     matched = [m for i, m in enumerate(matched) if i not in to_be_deleted]
 
@@ -117,12 +118,11 @@ def find_best_match(
         "matched": matched,
         "extra": extra,
         "wrong_intensity": wrong_intens,
-        "residual_peaks": residual_peak_obs,
     }
 
 
-def merge_peaks(peaks: np.ndarray, resolution: float = 0.0) -> np.ndarray:
-    if len(peaks) <= 1 or resolution == 0.0:
+def merge_peaks(peaks: np.ndarray, resolution: float = 0.1) -> np.ndarray:
+    if len(peaks) <= 1 or resolution == 0.1:
         return peaks
 
     peaks = peaks[np.argsort(peaks[:, 0])]
@@ -173,7 +173,6 @@ class PeakMatcher:
 
         # Initialize overrides (Fix for AttributeError)
         self._extra_override = None
-        self._wrong_intensity_override = None
         
         peak_calc = peak_calc.reshape(-1, 2)
         peak_obs = peak_obs.reshape(-1, 2)
@@ -183,6 +182,7 @@ class PeakMatcher:
             & (peak_calc[:, 1] > intensity_resolution * peak_calc[:, 1].max(initial=0))
         ]
         self.peak_calc = merge_peaks(peak_calc, resolution=angle_resolution)
+        self.overlap = (np.array([]).reshape(-1, 2), np.array([]).reshape(-1, 2))
 
         peak_obs = peak_obs[
             (peak_obs[:, 1] > 0)
@@ -232,14 +232,11 @@ class PeakMatcher:
             
         extra = self._result["extra"]
         extra = np.array(extra).reshape(-1)
+        
         return self.peak_calc[extra] if len(extra) > 0 else np.array([]).reshape(-1, 2)
 
     @property
     def wrong_intensity(self) -> tuple[np.ndarray, np.ndarray]:
-        # Check override first
-        if self._wrong_intensity_override is not None:
-            return self._wrong_intensity_override
-            
         wrong_intens = self._result["wrong_intensity"]
         wrong_intens = np.array(wrong_intens).reshape(-1, 2)
         return (
@@ -249,20 +246,8 @@ class PeakMatcher:
             self.peak_obs[wrong_intens[:, 1]]
             if len(wrong_intens) > 0
             else np.array([]).reshape(-1, 2),
-        )
-
-    @property
-    def matched_indices_calc(self) -> list[int]:
-        return [m[0] for m in self._result["matched"]]
-
-    @property
-    def wrong_intensity_indices_calc(self) -> list[int]:
-        return [m[0] for m in self._result["wrong_intensity"]]
-
-    @property
-    def extra_indices_calc(self) -> list[int]:
-        return self._result["extra"]
-    
+        )   
+            
     def _salvage_extras(self, peak_obs_orig: np.ndarray, tolerance: float):
         if len(peak_obs_orig) == 0: 
             return
@@ -279,15 +264,14 @@ class PeakMatcher:
 
         salvaged_calc = self.extra[is_salvageable]
         salvaged_obs = peak_obs_orig[closest_indices[is_salvageable]]
-
-        # Construct new wrong_intensity tuple
-        current_wi_calc, current_wi_obs = self.wrong_intensity
         
-        new_wi_calc = np.concatenate([current_wi_calc, salvaged_calc])
-        new_wi_obs = np.concatenate([current_wi_obs, salvaged_obs])
+        #print(f'DEBUG extra peaks before salvage: {self.extra}')
+        #print(f'DEBUG peak_obs_orig: {peak_obs_orig}')
+        #print(f'DEBUG salvageable extras: {salvaged_calc}')
+        #print(f'DEBUG corresponding original obs peaks: {salvaged_obs}')
 
-        # Set overrides
-        self._wrong_intensity_override = (new_wi_calc, new_wi_obs)
+        # Construct overlap tuple, delete salvaged peaks from extra, and update overlap
+        self.overlap = (salvaged_calc, salvaged_obs)
         self._extra_override = self.extra[~is_salvageable]
         
 
@@ -297,25 +281,30 @@ class PeakMatcher:
         I_wrong_intensity: float,
         I_missing: float,
         I_extra: float,
+        I_overlap: float,
         I_obs_total: float,
         matched_coeff: float = 1,
         wrong_intensity_coeff: float = 0,
         missing_coeff: float = 0,
         extra_coeff: float = 0,
+        overlap_coeff: float = 0,
     ) -> float:
         eps = 1e-12
+        #I_phase = I_matched + I_wrong_intensity + I_extra + I_overlap + eps
         I_phase = I_matched + I_wrong_intensity + I_extra + eps
         
         ratio_matched = I_matched / I_phase
         ratio_wrong_intensity = I_wrong_intensity / I_phase
         ratio_missing = I_missing / I_obs_total
         ratio_extra = I_extra / I_phase
+        ratio_overlap = I_overlap / I_phase
 
         return (
             matched_coeff * ratio_matched
             + wrong_intensity_coeff * ratio_wrong_intensity
             + missing_coeff * ratio_missing
             + extra_coeff * ratio_extra
+            + overlap_coeff * ratio_overlap
         )
 
     def score(
@@ -324,6 +313,7 @@ class PeakMatcher:
         wrong_intensity_coeff: float = 0,
         missing_coeff: float = 0,
         extra_coeff: float = 0,
+        overlap_coeff: float = 0,
     ) -> float:
         matched_obs, matched_calc = self.matched
         wrong_intens_obs, wrong_intens_calc = self.wrong_intensity
@@ -335,11 +325,12 @@ class PeakMatcher:
         I_wrong = np.sum(np.abs(wrong_intens_peaks[:, 1]))
         I_missing = np.sum(np.abs(self.missing[:, 1]))
         I_extra = np.sum(np.abs(self.extra[:, 1]))
+        I_overlap = np.sum(np.abs(self.overlap[0][:, 1])) if len(self.overlap[0]) > 0 else 0
         I_obs_total = np.sum(np.abs(self.peak_obs[:, 1])) + 1e-12
 
         return self.calculate_intensity_score(
-            I_matched, I_wrong, I_missing, I_extra, I_obs_total,
-            matched_coeff, wrong_intensity_coeff, missing_coeff, extra_coeff
+            I_matched, I_wrong, I_missing, I_extra, I_overlap, I_obs_total, 
+            matched_coeff, wrong_intensity_coeff, missing_coeff, extra_coeff, overlap_coeff
         )
 
     def jaccard_index(self) -> float:
@@ -379,6 +370,9 @@ class PeakMatcher:
             matched = self.matched[0]
             wrong_intens = self.wrong_intensity[0]
 
+        print(f'DEBUG {peak_type} peaks before isolation: {peaks}')
+        print(f'DEBUG matched peaks for isolation: {matched}')
+        print(f'DEBUG wrong intensity peaks for isolation: {wrong_intens}')
         matched = np.concatenate([matched, wrong_intens])
 
         if len(peaks) == 0:
@@ -394,10 +388,13 @@ class PeakMatcher:
         distance = np.min(distance, axis=1)
         min_intensity = self.peak_obs[:, 1].max() * min_intensity_ratio
         
-        print(f'DEBUG {peak_type} peaks: {peaks}')
-        print(f'DEBUG peak_obs_orig: {self.peak_obs}')
+        peaks = peaks[(distance > min_angle_difference) & (peaks[:, 1] > min_intensity)]
+        
+        for peak in peaks:
+            print(f'DEBUG {peak_type} peak after isolation: {peak}')
+        #print(f'DEBUG peak_obs_orig: {self.peak_obs}')
 
-        return peaks[(distance > min_angle_difference) & (peaks[:, 1] > min_intensity)]
+        return peaks
 
     def visualize(self):
         import matplotlib.pyplot as plt

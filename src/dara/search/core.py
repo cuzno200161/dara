@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 import copy
-from collections import deque
+from collections import defaultdict, deque
 import time
 from traceback import print_exc
 from turtle import done
 from typing import TYPE_CHECKING, Literal
+import os
+
+os.environ["RAY_DEDUP_LOGS"] = "0"
 
 import ray
-import os
 import numpy as np
 
 from dara.search.tree import BaseSearchTree, SearchTree
@@ -64,14 +66,30 @@ class PhaseCombinationRegistry:
         return True
 
 @ray.remote
-def _remote_expand_node(search_tree: BaseSearchTree, stop_flag, registry) -> BaseSearchTree:
+class PhaseStrikeRegistry:
+    def __init__(self, strike_threshold: int = 3):
+        self.strikes = defaultdict(int)
+        self.limit = strike_threshold
+
+    def add_strike(self, phase_name: str):
+        """Increment the strike count for a phase."""
+        self.strikes[phase_name] += 1
+
+    def check_strikes(self, phase_names: list[str]) -> bool:
+        """
+        Returns True if ANY of the provided phases has reached the strike limit.
+        """
+        return any(self.strikes[name] >= self.limit for name in phase_names)
+    
+@ray.remote
+def _remote_expand_node(search_tree: BaseSearchTree, stop_flag, combination_registry, strike_registry) -> BaseSearchTree:
     try:
         # Check if we should even start
         if ray.get(stop_flag.get.remote()):
             return search_tree
 
-        # Pass the stop_flag into the expansion logic
-        search_tree.expand_root(stop_flag, registry) 
+        # Pass the stop_flag and registry into the expansion logic
+        search_tree.expand_root(stop_flag, combination_registry, strike_registry) 
         return search_tree
     except ray.exceptions.TaskCancelledError:
         print("Task was cancelled remotely. Returning current state.")
@@ -81,13 +99,13 @@ def _remote_expand_node(search_tree: BaseSearchTree, stop_flag, registry) -> Bas
         raise e
 
 
-def remote_expand_node(search_tree, nid, stop_flag, registry):
+def remote_expand_node(search_tree, nid, stop_flag, combination_registry, strike_registry):
     # Check shared stop flag
     if ray.get(stop_flag.get.remote()):
         return None  # skip expansion
 
     subtree = BaseSearchTree.from_search_tree(root_nid=nid, search_tree=search_tree)
-    return _remote_expand_node.remote(subtree, stop_flag, registry)
+    return _remote_expand_node.remote(subtree, stop_flag, combination_registry, strike_registry)
 
 def downsample_xy(input_path: Path, output_path: Path, n_points: int, sigma: float =1.0):
     """
@@ -127,8 +145,10 @@ def search_phases(
     return_search_tree: bool = False,
     record_peak_matcher_scores: bool = False,
     score_coefficients: dict[str, float] | None = None,
+    strike_threshold: int = 1,
     false_peak_threshold: float = 0.05,
-    rpb_threshold: float = 2,
+    rpb_threshold: float = 2.0,
+    overfitting_threshold: float = 2.0,
     strain_threshold: float = 0.02,
     early_stopping: bool = False,
 ) -> list[SearchResult] | SearchTree:
@@ -153,8 +173,10 @@ def search_phases(
         record_peak_matcher_scores: whether to record the peak matcher scores. This is mainly used for
             debugging purposes.
         score_coefficients: the coefficients for the peak match score calculation    
+        strike_threshold: the strike threshold for phase elimination
         false_peak_threshold: the false peak threshold
         rpb_threshold: the RWP threshold
+        overfitting_threshold: the overfitting threshold
         strain_threshold: the strain threshold
         early_stopping: whether to enable early stopping
     """
@@ -179,7 +201,7 @@ def search_phases(
         if downsized_length is not None:
             parent_dir = pattern_path.parent if isinstance(pattern_path, Path) else Path(pattern_path).parent
             time_suffix = str(int(time.time() * 1000))
-            down_size_dir = parent_dir / (parent_dir.stem + "_downsized_")
+            down_size_dir = parent_dir / (parent_dir.stem + "_downsized")
             os.makedirs(down_size_dir, exist_ok=True)
             original_pattern_path = pattern_path  # keep the original
             downsized_pattern_path = down_size_dir / f"{pattern_path.stem}_downsized_{time_suffix}.xy"
@@ -210,6 +232,7 @@ def search_phases(
             enable_angular_cut=enable_angular_cut,
             max_phases=max_phases,
             rpb_threshold=rpb_threshold,
+            overfitting_threshold=overfitting_threshold,
             false_peak_threshold=false_peak_threshold,
             strain_threshold=strain_threshold,
             record_peak_matcher_scores=record_peak_matcher_scores,
@@ -220,8 +243,9 @@ def search_phases(
         max_worker = ray.cluster_resources()["CPU"]
         #max_worker = 1
         stop_flag = StopFlag.remote()
-        registry = PhaseCombinationRegistry.remote()
-        pending = [remote_expand_node(search_tree, search_tree.root, stop_flag, registry)]
+        combination_registry = PhaseCombinationRegistry.remote()
+        strike_registry = PhaseStrikeRegistry.remote(strike_threshold=strike_threshold)
+        pending = [remote_expand_node(search_tree, search_tree.root, stop_flag, combination_registry, strike_registry)]
         to_be_submitted = deque()
 
         while pending:
@@ -250,7 +274,31 @@ def search_phases(
                             node.data.status = "duplicate"
                     
                     search_tree.add_subtree(anchor_nid=remote_search_tree.root, search_tree=remote_search_tree)
-                    
+
+                    # Iterate over the new nodes returned by the worker
+                    for nid in remote_search_tree.nodes:
+                        # Skip the root of the subtree (it was the anchor)
+                        if nid == remote_search_tree.root: continue
+                        
+                        node = remote_search_tree.get_node(nid)
+                        
+                        # Check if this expansion resulted in "no_improvement"
+                        if node.data.status == "no_improvement":
+                            # The last phase in the list is the one that was just attempted
+                            if node.data.current_phases:
+                                attempted_phase = node.data.current_phases[-1]
+                                
+                                # Increment strikes on the main search_tree
+                                search_tree.phase_strikes[attempted_phase] += 1
+                                current_strikes = search_tree.phase_strikes[attempted_phase]
+                                
+                                # print(f"DEBUG: Phase {attempted_phase.path.stem} strike {current_strikes}/3")
+
+                                if current_strikes >= strike_threshold:
+                                    if attempted_phase in search_tree.all_phases_result:
+                                        print(f"Phase {attempted_phase.path.stem} reached {strike_threshold} strikes (no_improvement). Permanently removing from search.")
+                                        del search_tree.all_phases_result[attempted_phase]
+                                        
                     # Check if this is the winner
                     if any(node.data.status == "early_stop" for node in remote_search_tree.nodes.values()):
                         early_stop_found = True
@@ -309,7 +357,7 @@ def search_phases(
             # 3. Refill the queue (Normal operation)
             while len(pending) < max_worker and to_be_submitted:
                 nid = to_be_submitted.popleft()
-                pending.append(remote_expand_node(search_tree, nid, stop_flag, registry))
+                pending.append(remote_expand_node(search_tree, nid, stop_flag, combination_registry, strike_registry))
 
         if not return_search_tree:
             return search_tree.get_search_results()
