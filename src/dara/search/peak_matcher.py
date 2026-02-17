@@ -121,7 +121,7 @@ def find_best_match(
     }
 
 
-def merge_peaks(peaks: np.ndarray, resolution: float = 0.1) -> np.ndarray:
+def merge_peaks(peaks: np.ndarray, resolution: float = 0.02) -> np.ndarray:
     if len(peaks) <= 1 or resolution == 0.1:
         return peaks
 
@@ -160,7 +160,7 @@ class PeakMatcher:
         peak_calc: np.ndarray,
         peak_obs: np.ndarray,
         peak_obs_orig: np.ndarray | None = None,
-        intensity_resolution: float = 0.005,
+        intensity_resolution: float = 0,
         angle_resolution: float = 0.3,
         angle_tolerance: float = DEFAULT_ANGLE_TOLERANCE,
         intensity_tolerance: float = DEFAULT_INTENSITY_TOLERANCE,
@@ -181,14 +181,17 @@ class PeakMatcher:
             (peak_calc[:, 1] > 0)
             & (peak_calc[:, 1] > intensity_resolution * peak_calc[:, 1].max(initial=0))
         ]
-        self.peak_calc = merge_peaks(peak_calc, resolution=angle_resolution)
+        self.peak_calc = merge_peaks(peak_calc, resolution=0.02)
         self.overlap = (np.array([]).reshape(-1, 2), np.array([]).reshape(-1, 2))
 
         peak_obs = peak_obs[
             (peak_obs[:, 1] > 0)
             & (peak_obs[:, 1] > intensity_resolution * peak_obs[:, 1].max(initial=0))
         ]
-        self.peak_obs = merge_peaks(peak_obs, resolution=angle_resolution)
+        self.peak_obs = merge_peaks(peak_obs, resolution=0.02)
+
+        #print(f'DEBUG init in PeakMatcher DEBUG initial peak_calc: {self.peak_calc}')
+        #print(f'DEBUG init in PeakMatcher initial peak_obs: {self.peak_obs}')
 
         # 1. Run Standard Match
         self._result = find_best_match(
@@ -370,9 +373,11 @@ class PeakMatcher:
             matched = self.matched[0]
             wrong_intens = self.wrong_intensity[0]
 
-        print(f'DEBUG {peak_type} peaks before isolation: {peaks}')
-        print(f'DEBUG matched peaks for isolation: {matched}')
-        print(f'DEBUG wrong intensity peaks for isolation: {wrong_intens}')
+        #print(f'DEBUG {peak_type} peaks before isolation: {peaks}')
+        #print(f'DEBUG matched obs peaks for isolation: {self.matched[0]}')
+        #print(f'DEBUG matched calc peaks for isolation: {self.matched[1]}')
+        #print(f'DEBUG wrong intensity obs peaks for isolation: {self.wrong_intensity[0]}')
+        #print(f'DEBUG wrong intensity calc peaks for isolation: {self.wrong_intensity[1]}')
         matched = np.concatenate([matched, wrong_intens])
 
         if len(peaks) == 0:
@@ -390,8 +395,8 @@ class PeakMatcher:
         
         peaks = peaks[(distance > min_angle_difference) & (peaks[:, 1] > min_intensity)]
         
-        for peak in peaks:
-            print(f'DEBUG {peak_type} peak after isolation: {peak}')
+        #for peak in peaks:
+        #    print(f'DEBUG {peak_type} peak after isolation: {peak}')
         #print(f'DEBUG peak_obs_orig: {self.peak_obs}')
 
         return peaks

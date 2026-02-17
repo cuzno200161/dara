@@ -371,8 +371,71 @@ def get_natural_break_results(
         results = sorted(results, key=lambda x: x.refinement_result.lst_data.rwp)
         #results = sorted(results, key=lambda x: x.refinement_result.lst_data.rwp + 1.5 * len(x.phases))
 
-    return results
+    final_results = []
+    for res in results:
+        # Check if one phase is just a subset of the others (Russian Doll effect)
+        if is_redundant_subset(res):
+            continue
+        final_results.append(res)
 
+    # If aggressive filtering removed ALL results, return the best raw one
+    if len(final_results) == 0 and len(results) > 0:
+        return [results[0]]
+
+    return final_results
+
+def is_redundant_subset(result: SearchResult) -> bool:
+    """
+    Returns True if any phase in the result is a subset of the COMBINATION 
+    of all other phases (e.g. Phase A is contained in Phase B + Phase C).
+    """
+    phases = result.phases
+    if len(phases) < 2:
+        return False
+
+    all_peaks_df = result.refinement_result.peak_data
+
+    for current_phase in phases:
+        phase_name = [p.path.stem for p in current_phase][0]
+        
+        # Get target pahse peaks
+        peaks_target = all_peaks_df[
+            all_peaks_df["phase"] == phase_name
+        ][["2theta", "intensity"]].values
+        
+        if len(peaks_target) == 0:
+            continue
+
+        # Get Peaks for all other phases combined
+        peaks_others = all_peaks_df[
+            all_peaks_df["phase"] != phase_name
+        ][["2theta", "intensity"]].values
+        
+        if len(peaks_others) == 0:
+            continue
+
+        # 3. Sort the combined list (PeakMatcher generally prefers sorted inputs)
+        peaks_others = peaks_others[np.argsort(peaks_others[:, 0])]
+        peaks_target = peaks_target[np.argsort(peaks_target[:, 0])]
+
+        # 4. The Test: Is A a subset of Others?
+        matcher = PeakMatcher(
+            peaks_others,           # Target: The Combined Others
+            peaks_target,                # Query:  The Candidate Redundant Phase
+            angle_tolerance=0.3,    # Tight position tolerance
+            intensity_tolerance=100.0 # Ignore intensity (just checking position match)
+        )
+
+        # Calculate coverage
+        matched_indices_target = matcher.matched[:, 1]
+        
+        coverage_ratio = len(matched_indices_target) / len(peaks_target)
+
+        # Defining threshold
+        if coverage_ratio > 0.95:
+            return True
+
+    return False
 
 class BaseSearchTree(Tree):
     """
@@ -478,7 +541,6 @@ class BaseSearchTree(Tree):
         #print(f'DEBUG max_false_peak_intensity: {max_false_peak_intensity}, number of false peaks: {len(isolated_missing_peaks) + len(isolated_extra_peaks)}')
 
         if max_false_peak_intensity < self.false_peak_threshold and \
-                len(isolated_missing_peaks) + len(isolated_extra_peaks) <= 5 and \
                 new_result.lst_data.rpb < 20.0:
             return True
         return False
@@ -521,6 +583,7 @@ class BaseSearchTree(Tree):
             
             #print(f'DEBUG all_phases_result: {[p.path.stem for p in all_phases_result.keys()]}')
             
+            # End of tree search if there is no more phase to add, return results
             if not all_phases_result:
                 node.data.status = "expanded"
                 return self.get_expandable_children(nid)
@@ -565,7 +628,6 @@ class BaseSearchTree(Tree):
             
             # We collect the reservations we need to make first to batch the remote call 
             for phase, score in best_phases.items():
-                print(f'DEBUG evaluating phase {phase.path.stem} with preliminary score {score}')
                 potential_phases = [*node.data.current_phases, phase]
                 phase_names = [p.path.stem for p in potential_phases]
 
@@ -592,6 +654,7 @@ class BaseSearchTree(Tree):
                 final_candidates[phase] = score
 
             # Replace 'best_phases' with 'final_candidates' for the expensive refinement
+            print(f'DEBUG refining current phases {[p.path.stem for p in node.data.current_phases]} with candidate phases: {[phase.path.stem for phase in final_candidates]}')
             new_results = self.refine_phases(
                 final_candidates, pinned_phases=node.data.current_phases
             )
@@ -613,6 +676,9 @@ class BaseSearchTree(Tree):
                     break
 
                 new_phases = [*node.data.current_phases, phase]
+
+                print(f'DEBUG current node phases: {[p.path.stem for p in node.data.current_phases]}')
+                print(f'DEBUG evaluating phase {phase.path.stem}')
 
                 group_id = grouped_results[phase]["group_id"]
                 fom = grouped_results[phase]["fom"]
@@ -646,15 +712,18 @@ class BaseSearchTree(Tree):
                 
 
                 if new_result is not None:
+                    peak_calc = new_result.peak_data[["2theta", "intensity"]].values
+                    #print(f'DEBUG new_result.peak_data: {peak_calc if new_result is not None else None}')
+                    #print(f'DEBUG observed peaks: {self.peak_obs}')
+
                     peak_matcher = PeakMatcher(
-                        new_result.peak_data[["2theta", "intensity"]].values,
+                        peak_calc,
                         self.peak_obs,
                     )
-                    print(f'DEBUG new result phases: {phase.path.stem}')
-                    print(f'DEBUG new_result.peak_data: {new_result.peak_data[["2theta", "intensity"]] if new_result is not None else None}')
-                    print(f'DEBUG observed peaks: {self.peak_obs}')
                     
-                    isolated_missing_peaks = peak_matcher.get_isolated_peaks(peak_type="missing")                    
+                    #print(f'DEBUG getting isolated missing peaks for current phases {[p.path.stem for p in node.data.current_phases]} and new phase {phase.path.stem}')
+                    isolated_missing_peaks = peak_matcher.get_isolated_peaks(peak_type="missing")      
+                    #print(f'DEBUG getting isolated extra peaks for current phases {[p.path.stem for p in node.data.current_phases]} and new phase {phase.path.stem}')              
                     isolated_extra_peaks = peak_matcher.get_isolated_peaks(peak_type="extra")
 
                 else:
