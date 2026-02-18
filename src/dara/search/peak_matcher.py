@@ -98,18 +98,21 @@ def find_best_match(
 
     to_be_deleted = set()
     for i in range(len(matched)):
-        peak_idx = matched[i][1]
-        peak_intensity_diff = absolute_log_error(
-            peak_obs[peak_idx][1],
-            peak_obs[peak_idx][1] - residual_peak_obs[peak_idx][1],
-        )
+        calc_idx = matched[i][0]
+        obs_idx = matched[i][1]
         
-        if peak_intensity_diff > np.log(max_intensity_tolerance):
-            missing.append(peak_idx)
-            extra.append(matched[i][0])
-            to_be_deleted.add(i)
-        elif peak_intensity_diff > np.log(intensity_tolerance):
+        peak_intensity_diff = absolute_log_error(
+            peak_obs[obs_idx][1],
+            peak_obs[obs_idx][1] - residual_peak_obs[obs_idx][1],
+        )
+
+        if peak_intensity_diff > np.log(intensity_tolerance):
             wrong_intens.append(matched[i])
+            to_be_deleted.add(i)
+
+        if -peak_intensity_diff > np.log(max_intensity_tolerance):
+            missing.append(obs_idx)
+            to_be_deleted.add(i)
 
     matched = [m for i, m in enumerate(matched) if i not in to_be_deleted]
 
@@ -121,7 +124,7 @@ def find_best_match(
     }
 
 
-def merge_peaks(peaks: np.ndarray, resolution: float = 0.02) -> np.ndarray:
+def merge_peaks(peaks: np.ndarray, resolution: float = 0.1) -> np.ndarray:
     if len(peaks) <= 1 or resolution == 0.1:
         return peaks
 
@@ -160,7 +163,7 @@ class PeakMatcher:
         peak_calc: np.ndarray,
         peak_obs: np.ndarray,
         peak_obs_orig: np.ndarray | None = None,
-        intensity_resolution: float = 0,
+        intensity_resolution: float = 0.005,
         angle_resolution: float = 0.3,
         angle_tolerance: float = DEFAULT_ANGLE_TOLERANCE,
         intensity_tolerance: float = DEFAULT_INTENSITY_TOLERANCE,
@@ -181,17 +184,14 @@ class PeakMatcher:
             (peak_calc[:, 1] > 0)
             & (peak_calc[:, 1] > intensity_resolution * peak_calc[:, 1].max(initial=0))
         ]
-        self.peak_calc = merge_peaks(peak_calc, resolution=0.02)
+        self.peak_calc = merge_peaks(peak_calc, resolution=angle_resolution)
         self.overlap = (np.array([]).reshape(-1, 2), np.array([]).reshape(-1, 2))
 
         peak_obs = peak_obs[
             (peak_obs[:, 1] > 0)
             & (peak_obs[:, 1] > intensity_resolution * peak_obs[:, 1].max(initial=0))
         ]
-        self.peak_obs = merge_peaks(peak_obs, resolution=0.02)
-
-        #print(f'DEBUG init in PeakMatcher DEBUG initial peak_calc: {self.peak_calc}')
-        #print(f'DEBUG init in PeakMatcher initial peak_obs: {self.peak_obs}')
+        self.peak_obs = merge_peaks(peak_obs, resolution=angle_resolution)
 
         # 1. Run Standard Match
         self._result = find_best_match(
@@ -373,11 +373,6 @@ class PeakMatcher:
             matched = self.matched[0]
             wrong_intens = self.wrong_intensity[0]
 
-        #print(f'DEBUG {peak_type} peaks before isolation: {peaks}')
-        #print(f'DEBUG matched obs peaks for isolation: {self.matched[0]}')
-        #print(f'DEBUG matched calc peaks for isolation: {self.matched[1]}')
-        #print(f'DEBUG wrong intensity obs peaks for isolation: {self.wrong_intensity[0]}')
-        #print(f'DEBUG wrong intensity calc peaks for isolation: {self.wrong_intensity[1]}')
         matched = np.concatenate([matched, wrong_intens])
 
         if len(peaks) == 0:
@@ -393,13 +388,11 @@ class PeakMatcher:
         distance = np.min(distance, axis=1)
         min_intensity = self.peak_obs[:, 1].max() * min_intensity_ratio
         
-        peaks = peaks[(distance > min_angle_difference) & (peaks[:, 1] > min_intensity)]
-        
         #for peak in peaks:
-        #    print(f'DEBUG {peak_type} peak after isolation: {peak}')
+        #    print(f'DEBUG {peak_type} peak: {peak}')
         #print(f'DEBUG peak_obs_orig: {self.peak_obs}')
 
-        return peaks
+        return peaks[(distance > min_angle_difference) & (peaks[:, 1] > min_intensity)]
 
     def visualize(self):
         import matplotlib.pyplot as plt

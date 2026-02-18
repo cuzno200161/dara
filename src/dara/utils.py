@@ -419,7 +419,7 @@ def find_optimal_score_threshold(
     valid_scores = scores
 
     # Check: If there are too few phases (e.g., less than 5), use default threshold
-    if len(valid_scores) < 5:
+    if len(valid_scores) < 4:
         # Return default 0.6. 
         if len(valid_scores) > 0:
             return 0.6, np.percentile(valid_scores, np.arange(0, 101))

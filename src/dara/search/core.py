@@ -187,9 +187,9 @@ def search_phases(
         refinement_params = {}
 
     if not ray.is_initialized():
-        #num_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", 4))
+        num_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", 4))
         #ray.init(num_cpus=num_cpus, local_mode=True)
-        ray.init(num_cpus=1)
+        ray.init(num_cpus=num_cpus)
         print("DEBUG: Ray resources:", ray.available_resources())
 
     phase_params = {**DEFAULT_PHASE_PARAMS, **phase_params}
