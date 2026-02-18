@@ -416,6 +416,7 @@ def find_optimal_score_threshold(
     
     # Filter: Only include phases with score < 0.95
     #valid_scores = scores[scores < 0.95]
+    #valid_scores = scores[scores > 0.0]
     valid_scores = scores
 
     # Check: If there are too few phases (e.g., less than 5), use default threshold

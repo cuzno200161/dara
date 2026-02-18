@@ -75,7 +75,7 @@ class SearchNodeData(BaseModel):
         phase_string += " " * max(60 - total_len, 0)
 
         return f"{phase_string}" + (
-            f"Rwp: {self.current_result.lst_data.rwp if self.current_result is not None else 1 * 100:.2f}% | "
+            f"Rpb: {self.current_result.lst_data.rpb if self.current_result is not None else 1 * 100:.2f}% | "
             f"Strain: {round(self.lattice_strain * 100, 2)}% | "
             f"Group {self.group_id}  "
             if self.current_result is not None

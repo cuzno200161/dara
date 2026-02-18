@@ -349,17 +349,17 @@ def calculate_result_score(result: SearchResult) -> float:
     Calculates the result score by considering number of phases and strain
     """
     
-    rwp = result.refinement_result.lst_data.rwp
+    rpb = result.refinement_result.lst_data.rpb
     lattice_strains = [get_number(strain) for strain in result.lattice_strains]
-    avg_strain = sum(lattice_strains) / len(lattice_strains) if lattice_strains else 0
+    avg_strain = abs(sum(lattice_strains) / len(lattice_strains)) if lattice_strains else 0
     num_phases = len(result.phases)
     max_peak = result.refinement_result.peak_data["intensity"].max() if not result.refinement_result.peak_data.empty else 1
-    missing_peaks = (result.missing_peaks / max_peak).sum() if result.missing_peaks is not None else 0
-    extra_peaks = (result.extra_peaks / max_peak).sum() if result.extra_peaks is not None else 0
-    false_peaks = missing_peaks + extra_peaks
-    score = 100 - rwp - 0.5 * avg_strain - 1.5 * num_phases - 1.0 * false_peaks
+    missing_peaks = np.array(result.missing_peaks).reshape(-1, 2).sum() if result.missing_peaks is not None else 0
+    extra_peaks = np.array(result.extra_peaks).reshape(-1, 2).sum() if result.extra_peaks is not None else 0
+    false_peaks = (missing_peaks + extra_peaks) / max_peak if max_peak > 0 else 0
+    score = 100 - rpb - 0.5 * avg_strain - 2.0 * num_phases - 1.0 * false_peaks
     
-    print(f'DEBUG calculating result score: {", ".join([p[0].path.stem for p in result.phases])} | Rwp: {rwp:.4f} | Avg Strain: {avg_strain:.4f} | Num Phases: {num_phases} | Missing Peaks: {missing_peaks:.2f} | Extra Peaks: {extra_peaks:.2f} | False Peaks: {false_peaks:.2f} | Score: {score:.4f}')
+    print(f'DEBUG calculating result score: {", ".join([p[0].path.stem for p in result.phases])} | Rpb: {rpb:.4f} | Avg Strain: {avg_strain:.4f} | Num Phases: {num_phases} | Missing Peaks: {missing_peaks:.2f} | Extra Peaks: {extra_peaks:.2f} | False Peaks: {false_peaks:.2f} | Score: {score:.4f}')
     
     return score
 
@@ -636,7 +636,7 @@ class BaseSearchTree(Tree):
             )
             
             # If root node, keep only top-k to avoid combinatorial explosion
-            if nid == self.root:
+            if len(current_phases_set) == 0:
                 TOP_K = 5
                 best_score = max(best_phases.values()) if best_phases else 0
                 kept_phases = {}
@@ -649,7 +649,6 @@ class BaseSearchTree(Tree):
                 if len(best_phases) > len(kept_phases):
                     logger.info(f"ROOT PRUNING: Reduced candidates from {len(best_phases)} to {len(kept_phases)} (Top-{TOP_K}).")
                     best_phases = kept_phases
-            
             for phase, score in raw_scores.items():
                 print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
             for phase, score in scores.items():
