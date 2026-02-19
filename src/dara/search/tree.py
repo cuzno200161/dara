@@ -326,7 +326,7 @@ def remove_unnecessary_phases(
     original_rpb = rpb(y_calc, y_obs, y_bkg)
     
     new_phases = []
-    print(f"DEBUG checking unnecessary phases {list(phases_results.keys())}")
+    #print(f"DEBUG checking unnecessary phases {list(phases_results.keys())}")
 
     for excluded_phase in phases_results:
         # If this is the newly added phase, keep it automatically
@@ -337,7 +337,7 @@ def remove_unnecessary_phases(
         y_calc_excl = y_calc.copy()
         y_calc_excl -= phases_results[excluded_phase]
         new_rpb = rpb(y_calc_excl, y_obs, y_bkg)
-        print(f"DEBUG Removing phase {excluded_phase}: original RPB = {original_rpb}, new RPB = {new_rpb}")
+        #print(f"DEBUG Removing phase {excluded_phase}: original RPB = {original_rpb}, new RPB = {new_rpb}")
 
         if new_rpb > original_rpb + overfitting_threshold:
             new_phases.append(cif_paths_dict[excluded_phase])
@@ -359,49 +359,36 @@ def calculate_result_score(result: SearchResult) -> float:
     false_peaks = (missing_peaks + extra_peaks) / max_peak if max_peak > 0 else 0
     score = 100 - rpb - 0.5 * avg_strain - 2.0 * num_phases - 1.0 * false_peaks
     
-    print(f'DEBUG calculating result score: {", ".join([p[0].path.stem for p in result.phases])} | Rpb: {rpb:.4f} | Avg Strain: {avg_strain:.4f} | Num Phases: {num_phases} | Missing Peaks: {missing_peaks:.2f} | Extra Peaks: {extra_peaks:.2f} | False Peaks: {false_peaks:.2f} | Score: {score:.4f}')
-    
     return score
 
 def get_natural_break_results(
-    results: list[SearchResult], peak_obs: list[tuple[float, float]] | None = None, sorting: bool = True
+    results: list[SearchResult], 
+    peak_obs: list[tuple[float, float]] | None = None, 
+    sorting: bool = True
 ) -> list[SearchResult]:
-    """Get the natural break results based on (1-rho) value."""
-    all_rhos = None
+    """
+    Selecting best 10 results and displaying the ranked leaderboard.
+    """
+    if not results:
+        return []
 
-    # remove results that are too bad (dead end in the tree search)
-    while all_rhos is None or max(all_rhos) > min(all_rhos) + 5:
-        all_rhos = [result.refinement_result.lst_data.rho for result in results]
-        if len(set(all_rhos)) > 2:
-            # get the first natural break
-            interval = jenkspy.jenks_breaks(all_rhos, n_classes=2)
-            rho_cutoff = interval[1]
-        elif len(set(all_rhos)) == 2 and max(all_rhos) - min(all_rhos) > 10:
-            rho_cutoff = min(all_rhos) + 10
-        else:
-            break
-        results = [
-            result
-            for result in results
-            if result.refinement_result.lst_data.rho <= rho_cutoff
-        ]
-        all_rhos = [result.refinement_result.lst_data.rho for result in results]
     if sorting:
-        #results = sorted(results, key=lambda x: x.refinement_result.lst_data.rwp)
-        #results = sorted(results, key=lambda x: x.refinement_result.lst_data.rwp + 1.5 * len(x.phases))
+        # 1. Sort all results by score (highest score first)
         results = sorted(results, key=lambda x: calculate_result_score(x), reverse=True)
-
-    #final_results = []
-    #for res in results:
-    #    # Check if one phase is just a subset of the others (Russian Doll effect)
-    #    #if is_redundant_subset(res, peak_obs):
-    #    #    continue
-    #    final_results.append(res)
-
-    # If aggressive filtering removed ALL results, return the best raw one
-    #if len(final_results) == 0 and len(results) > 0:
-    #    return [results[0]]
-
+        
+        # 2. Slice to keep only the top 10
+        results = results[:10]
+        
+        # 3. Print/Log the sorted leaderboard
+        print("\n" + "="*30)
+        print(" TOP 10 RANKED RESULTS ")
+        print("="*30)
+        for i, res in enumerate(results, 1):
+            score = calculate_result_score(res) # Re-calculating for display
+            phases = ", ".join([p[0].path.stem for p in res.phases])
+            print(f"{i}. Score: {score:.2f} | {phases}")
+        print("="*30 + "\n")
+        
     return results
 
 def is_redundant_subset(result: SearchResult, peak_obs: list[tuple[float, float]] | None = None) -> bool:
@@ -616,14 +603,14 @@ class BaseSearchTree(Tree):
                 
             # remove phases that are already in the current result
             current_phases_set = set(node.data.current_phases)
-            print(f'DEBUG current phases set: {[p.path.stem for p in current_phases_set]}')
+            #print(f'DEBUG current phases set: {[p.path.stem for p in current_phases_set]}')
             all_phases_result = {
                 phase: result
                 for phase, result in self.all_phases_result.items()
                 if phase not in current_phases_set
             }
             
-            print(f'DEBUG all_phases_result: {[p.path.stem for p in all_phases_result.keys()]}')
+            #print(f'DEBUG all_phases_result: {[p.path.stem for p in all_phases_result.keys()]}')
             
             if not all_phases_result:
                 node.data.status = "expanded"
@@ -649,15 +636,14 @@ class BaseSearchTree(Tree):
                 if len(best_phases) > len(kept_phases):
                     logger.info(f"ROOT PRUNING: Reduced candidates from {len(best_phases)} to {len(kept_phases)} (Top-{TOP_K}).")
                     best_phases = kept_phases
-            for phase, score in raw_scores.items():
-                print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
-            for phase, score in scores.items():
-                print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
-            for phase, score in best_phases.items():
-                print(f'DEBUG best phases {phase.path.stem} score = {score}')
-
-            print(f'DEBUG : threshold = {threshold}')
-            print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
+            #for phase, score in raw_scores.items():
+            #    print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
+            #for phase, score in scores.items():
+            #    print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
+            #for phase, score in best_phases.items():
+            #    print(f'DEBUG best phases {phase.path.stem} score = {score}')
+            #print(f'DEBUG : threshold = {threshold}')
+            #print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
 
             if self.record_peak_matcher_scores:
                 node.data.peak_matcher_scores = scores
@@ -668,7 +654,7 @@ class BaseSearchTree(Tree):
             
             # We collect the reservations we need to make first to batch the remote call 
             for phase, score in best_phases.items():
-                print(f'DEBUG evaluating phase {phase.path.stem} with preliminary score {score}')
+                #print(f'DEBUG evaluating phase {phase.path.stem} with preliminary score {score}')
                 potential_phases = [*node.data.current_phases, phase]
                 phase_names = [p.path.stem for p in potential_phases]
 
@@ -718,8 +704,8 @@ class BaseSearchTree(Tree):
 
                 new_phases = [*node.data.current_phases, phase]
 
-                print(f'DEBUG current node phases: {[p.path.stem for p in node.data.current_phases]}')
-                print(f'DEBUG evaluating phase {phase.path.stem}')
+                #print(f'DEBUG current node phases: {[p.path.stem for p in node.data.current_phases]}')
+                #print(f'DEBUG evaluating phase {phase.path.stem}')
 
                 group_id = grouped_results[phase]["group_id"]
                 fom = grouped_results[phase]["fom"]
@@ -1022,7 +1008,7 @@ class BaseSearchTree(Tree):
             residual_peaks = self.peak_obs
         else:
             # We still need a matcher here to determine the residuals relative to the current result
-            print('DEBUG getting residual peaks for current result...')
+            #print('DEBUG getting residual peaks for current result...')
             res_matcher = PeakMatcher(
                 current_result.peak_data[["2theta", "intensity"]].values, 
                 self.peak_obs,
