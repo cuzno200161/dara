@@ -564,7 +564,7 @@ class BaseSearchTree(Tree):
         #print(f'DEBUG max_false_peak_intensity: {max_false_peak_intensity}, number of false peaks: {len(isolated_missing_peaks) + len(isolated_extra_peaks)}')
 
         if max_false_peak_intensity < self.false_peak_threshold and \
-                len(isolated_missing_peaks) + len(isolated_extra_peaks) <= 5 and \
+                len(isolated_missing_peaks) + len(isolated_extra_peaks) <= 3 and \
                 new_result.lst_data.rpb < 20.0:
             return True
         return False
@@ -623,27 +623,27 @@ class BaseSearchTree(Tree):
             )
             
             # If root node, keep only top-k to avoid combinatorial explosion
-            if len(current_phases_set) == 0:
-                TOP_K = 5
-                best_score = max(best_phases.values()) if best_phases else 0
-                kept_phases = {}
-                for i, (phase, score) in enumerate(best_phases.items()):
-                    if i < TOP_K:
-                        kept_phases[phase] = score
-                    elif score >= (best_score * 0.98):
-                        kept_phases[phase] = score
-                
-                if len(best_phases) > len(kept_phases):
-                    logger.info(f"ROOT PRUNING: Reduced candidates from {len(best_phases)} to {len(kept_phases)} (Top-{TOP_K}).")
-                    best_phases = kept_phases
-            #for phase, score in raw_scores.items():
-            #    print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
-            #for phase, score in scores.items():
-            #    print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
-            #for phase, score in best_phases.items():
-            #    print(f'DEBUG best phases {phase.path.stem} score = {score}')
-            #print(f'DEBUG : threshold = {threshold}')
-            #print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
+            #if len(current_phases_set) == 0:
+            #    TOP_K = 5
+            #    best_score = max(best_phases.values()) if best_phases else 0
+            #    kept_phases = {}
+            #    for i, (phase, score) in enumerate(best_phases.items()):
+            #        if i < TOP_K:
+            #            kept_phases[phase] = score
+            #        elif score >= (best_score * 0.98):
+            #            kept_phases[phase] = score
+            #    if len(best_phases) > len(kept_phases):
+            #        logger.info(f"ROOT PRUNING: Reduced candidates from {len(best_phases)} to {len(kept_phases)} (Top-{TOP_K}).")
+            #        best_phases = kept_phases
+            
+            for phase, score in raw_scores.items():
+                print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
+            for phase, score in scores.items():
+                print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
+            for phase, score in best_phases.items():
+                print(f'DEBUG best phases {phase.path.stem} score = {score}')
+            print(f'DEBUG : threshold = {threshold}')
+            print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
 
             if self.record_peak_matcher_scores:
                 node.data.peak_matcher_scores = scores
@@ -1084,7 +1084,7 @@ class BaseSearchTree(Tree):
         # 4. Thresholding & Sorting
         threshold, _ = find_optimal_score_threshold(list(scores.values()))
 
-        filtered = {p: s for p, s in scores.items() if s >= threshold and s > 0}
+        filtered = {p: s for p, s in scores.items() if s >= threshold}
         
         sorted_results = dict(sorted(
             filtered.items(), 
@@ -1380,10 +1380,7 @@ class SearchTree(BaseSearchTree):
                     if best_member["phase"] in all_phases_result:
                         final_candidates[best_member["phase"]] = all_phases_result[best_member["phase"]]
                 
-            logger.info(
-                f"Phases are grouped into {len(phase_group_mapping)} groups. "
-                f"Pinned phases were included to mask duplicate candidates."
-            )
+            logger.info(f"Phases are grouped into {len(phase_group_mapping)} groups. ")
             
             self.phases_grouped = phases_grouped
             self.all_phases_result = final_candidates
@@ -1489,6 +1486,12 @@ class SearchTree(BaseSearchTree):
             for phase, result in all_phases_result.items()
             if result is not None
         }
+
+        #result = list(all_phases_result.values())[0]
+        #print(f'eps1: current_result: {result.lst_data.raw_lst}')
+        #print(f'rho: {result.lst_data.rho}')
+        #print(f'current_result rpb: {result.lst_data.rpb}')
+        #print(f'peaks: {result.peak_data[["2theta", "intensity"]]}')
         
         logger.info(
             f"Finished refining {len(cif_paths)} phases, "
