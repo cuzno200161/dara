@@ -231,14 +231,14 @@ def calculate_fom_and_strain(
 
 def group_phases(
     all_phases_result: dict[RefinementPhase, RefinementResult | None],
-    distance_threshold: float = 0.1,
+    distance_threshold: float = 0.10,
 ) -> dict[RefinementPhase, dict[str, float | int]]:
     """
     Group the phases based on their similarity.
 
     Args:
         all_phases_result: the result of all the phases
-        distance_threshold: the distance threshold for clustering, default to 0.1
+        distance_threshold: the distance threshold for clustering, default to 0.10
 
     Returns
     -------
@@ -276,6 +276,7 @@ def group_phases(
                 ["2theta", "intensity"]
             ].values
         )
+        print(f'DEBUG phase {phase.path.stem} peaks: {peaks[-1]}')
 
     #print('DEBUG calculating pairwise similarity matrix...')
     pairwise_similarity = batch_peak_matching(
@@ -1379,6 +1380,12 @@ class SearchTree(BaseSearchTree):
                     # Ensure we can actually find the result in the candidates dict
                     if best_member["phase"] in all_phases_result:
                         final_candidates[best_member["phase"]] = all_phases_result[best_member["phase"]]
+
+            # print out the grouping result for debugging
+            for group_id, members in phase_group_mapping.items():
+                logger.info(f"Group {group_id}:")
+                for member in members:
+                    logger.info(f"  Phase: {member['phase'].path.stem}, Pinned: {member['is_pinned']}")
                 
             logger.info(f"Phases are grouped into {len(phase_group_mapping)} groups. ")
             
@@ -1415,7 +1422,7 @@ class SearchTree(BaseSearchTree):
             raise ValueError("No peaks are detected in the pattern.")
 
         peak_list_array = peak_list[["2theta", "intensity"]].values
-        #print(f"DEBUG peak detection: {peak_list_array}")
+        print(f"DEBUG peak detection: {peak_list_array}")
 
         if self.enable_angular_cut:
             optimal_wmax = get_optimal_max_two_theta(peak_list)

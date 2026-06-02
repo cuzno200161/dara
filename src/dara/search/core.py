@@ -113,7 +113,7 @@ def downsample_xy(input_path: Path, output_path: Path, n_points: int, sigma: flo
     Assumes file format: two columns, 2theta and intensity.
     """
     # Load pattern
-    data = np.loadtxt(input_path)
+    data = np.loadtxt(input_path, skiprows=2)  # Skip header if present
     twotheta = data[:, 0]
     intensity = data[:, 1]
     
