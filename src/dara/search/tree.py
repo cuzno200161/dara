@@ -276,7 +276,7 @@ def group_phases(
                 ["2theta", "intensity"]
             ].values
         )
-        print(f'DEBUG phase {phase.path.stem} peaks: {peaks[-1]}')
+        #print(f'DEBUG phase {phase.path.stem} peaks: {peaks[-1]}')
 
     #print('DEBUG calculating pairwise similarity matrix...')
     pairwise_similarity = batch_peak_matching(

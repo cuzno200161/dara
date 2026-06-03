@@ -53,9 +53,6 @@ def copy_xy_pattern(pattern_path: Path, working_dir: Path) -> Path:
 def trim_pattern(xy_content: np.ndarray) -> np.ndarray:
     """Trim the pattern to remove negative intensities."""
     if xy_content[:, 1].min() <= 0:
-        warnings.warn(
-            "Pattern contains negative or zero intensities. Setting them to 1e-6."
-        )
         xy_content[:, 1] = np.clip(xy_content[:, 1], 1e-6, None)
 
     if xy_content[:, 0].min() < 1.0:
