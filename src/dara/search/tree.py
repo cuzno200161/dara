@@ -35,7 +35,6 @@ from dara.utils import (
     load_symmetrized_structure,
     parse_refinement_param,
     rpb,
-    get_stoichiometry_complexity,
 )
 
 
@@ -712,11 +711,14 @@ class BaseSearchTree(Tree):
 
                 group_id = grouped_results[phase]["group_id"]
                 fom = grouped_results[phase]["fom"]
-                
-                # Modify to find the phase with the simplest stoichiometry (lowest complexity score)
-                is_best_result_in_group = phase == min(
-                    [ phase_ for phase_ in grouped_results if grouped_results[phase_]["group_id"] == group_id ],
-                    key=lambda x: get_stoichiometry_complexity(x.path.stem),
+
+                is_best_result_in_group = phase == max(
+                    [
+                        phase_
+                        for phase_ in grouped_results
+                        if grouped_results[phase_]["group_id"] == group_id
+                    ],
+                    key=lambda x: grouped_results[x]["fom"],
                 )
 
                 #if new_result is not None:
