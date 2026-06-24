@@ -359,7 +359,7 @@ def calculate_result_score(result: SearchResult) -> float:
     missing_peaks = np.array(result.missing_peaks).reshape(-1, 2).sum() if result.missing_peaks is not None else 0
     extra_peaks = np.array(result.extra_peaks).reshape(-1, 2).sum() if result.extra_peaks is not None else 0
     false_peaks = (missing_peaks + extra_peaks) / max_peak if max_peak > 0 else 0
-    score = 100 - rpb - 0.5 * avg_strain - 2.0 * num_phases - 1.0 * false_peaks
+    score = 100 - rpb - 0.5 * avg_strain - 1.5 * num_phases - 1.0 * false_peaks
     
     return score
 
@@ -711,6 +711,9 @@ class BaseSearchTree(Tree):
 
                 group_id = grouped_results[phase]["group_id"]
                 fom = grouped_results[phase]["fom"]
+                
+                def is_integer_compound(p):
+                    return not bool(re.search(r'\d+\.\d+', p.path.name))
 
                 is_best_result_in_group = phase == max(
                     [
@@ -718,7 +721,7 @@ class BaseSearchTree(Tree):
                         for phase_ in grouped_results
                         if grouped_results[phase_]["group_id"] == group_id
                     ],
-                    key=lambda x: grouped_results[x]["fom"],
+                    key=lambda x: (is_integer_compound(x), grouped_results[x]["fom"]),
                 )
 
                 #if new_result is not None:
