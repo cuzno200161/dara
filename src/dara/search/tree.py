@@ -10,6 +10,7 @@ from subprocess import TimeoutExpired
 from typing import TYPE_CHECKING, Literal
 import time
 import math
+import re
 
 import jenkspy
 import numpy as np
@@ -1367,13 +1368,28 @@ class SearchTree(BaseSearchTree):
                 )
 
             # Filter candidates for search
+            def is_integer_compound(p):
+                return not bool(re.search(r'\d+\.\d+', p.path.name))
+                
             final_candidates = {}
             for group, members in phase_group_mapping.items():
-                # Sort members by FOM descending
-                members.sort(key=lambda x: x["fom"], reverse=True)
+                print(f"\n[DEBUG INIT] Processing Group {group} candidates:")
+                for m in members:
+                    is_int = is_integer_compound(m["phase"])
+                    print(f"  -> Phase: {m['phase'].path.stem} | FOM: {m['fom']:.4f} | Is Integer: {is_int}")
+
+                # Separate integer and fractional members
+                integer_members = [m for m in members if is_integer_compound(m["phase"])]
                 
-                best_member = members[0]
+                if len(integer_members) > 0:
+                    print(f"[DEBUG INIT] Integer compounds found. Prioritizing integer pool.")
+                    best_member = max(integer_members, key=lambda x: x["fom"])
+                else:
+                    print(f"[DEBUG INIT] ONLY fractional compounds found. Falling back to highest FOM.")
+                    best_member = max(members, key=lambda x: x["fom"])
                 
+                print(f"[DEBUG INIT] Selected Winner for Group {group}: {best_member['phase'].path.stem}")
+
                 # If the winner is a pinned phase, we do not add it to the search candidates.
                 # If the winner is a regular phase, we add it.
                 if not best_member["is_pinned"]:
