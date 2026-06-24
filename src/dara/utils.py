@@ -601,3 +601,33 @@ def parse_refinement_param(
         upper = float(match.group(3))
         return initial, lower, upper
     raise ValueError(f"Invalid refinement parameter: {refinement_param}")
+
+import re
+
+def get_stoichiometry_complexity(phase_name: str) -> float:
+    """
+    Returns a complexity score for a chemical formula based on its string representation.
+    Lower scores indicate simpler stoichiometry (clean integers or no explicitly written numbers).
+    Examples:
+        'TiO2' -> 2.0 (matches '2', adds 2.0)
+        'Ti1.99O3.89' -> 11.99 + 13.89 = 25.88 (matches decimals, adds penalty + value)
+    """
+    # Find all numeric components in the formula string
+    numbers = re.findall(r"[-+]?\d*\.\d+|\d+", phase_name)
+    
+    score = 0.0
+    for num_str in numbers:
+        try:
+            val = float(num_str)
+            if "." in num_str:
+                # Big penalty for non-integer compositions like 1.99 or 3.89
+                score += 10.0 + val
+            else:
+                # Small score adjustment for pure integers
+                score += val
+        except ValueError:
+            pass
+            
+    # Also include length penalty as a tie-breaker for long, complex strings
+    score += len(phase_name) * 0.01
+    return score
