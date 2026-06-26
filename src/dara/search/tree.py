@@ -232,7 +232,7 @@ def calculate_fom_and_strain(
 
 def group_phases(
     all_phases_result: dict[RefinementPhase, RefinementResult | None],
-    distance_threshold: float = 0.10,
+    distance_threshold: float = 0.05,
 ) -> dict[RefinementPhase, dict[str, float | int]]:
     """
     Group the phases based on their similarity.
@@ -1247,7 +1247,7 @@ class SearchTree(BaseSearchTree):
         refine_params: the refinement parameters, it will be passed to the refinement function.
         phase_params: the phase parameters, it will be passed to the refinement function.
         instrument_profile: the name/path of the instrument file, it will be passed to the refinement function.
-        maximum_grouping_distance: the maximum grouping distance, default to 0.1
+        maximum_grouping_distance: the maximum grouping distance, default to 0.05
         max_phases: the maximum number of phases, note that the pinned phases are COUNTED as well
         rpb_threshold: the minimium Rpb improvement for the search tree to continue to expand one node.
         overfitting_threshold: the threshold for removing unnecessary phases to prevent overfitting, default to 0.05
@@ -1269,7 +1269,7 @@ class SearchTree(BaseSearchTree):
         instrument_profile: str | Path = "Aeris-fds-Pixcel1d-Medipix3",
         express_mode: bool = True,
         enable_angular_cut: bool = True,
-        maximum_grouping_distance: float = 0.1,
+        maximum_grouping_distance: float = 0.05,
         max_phases: float = 5,
         rpb_threshold: float = 2.0,
         overfitting_threshold: float = 2.0,

@@ -85,7 +85,7 @@ class EflechWorker:
                 else:
                     raise ValueError(f"Unknown pattern file type: {pattern.suffix}")
 
-            xy_content = np.loadtxt(pattern_path_temp, dtype=float)
+            xy_content = np.loadtxt(pattern_path_temp, dtype=float, skiprows=2)
             xy_content = trim_pattern(xy_content)
             np.savetxt(pattern_path_temp, xy_content, fmt="%.6f")
 

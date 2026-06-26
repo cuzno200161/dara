@@ -106,9 +106,9 @@ def generate_control_file(
     xy_pattern_path = control_file_path.parent / pattern_path.name
 
     try:
-        xy_content = np.loadtxt(pattern_path)
+        xy_content = np.loadtxt(pattern_path, skiprows=2)
     except ValueError as e:
-        raise ValueError(f"Could not load pattern file {pattern_path}") from e
+        raise ValueError(f"Could not load pattern file {pattern_path}. Underlying error: {e}") from e
 
     xy_content = trim_pattern(xy_content)
     np.savetxt(xy_pattern_path, xy_content, fmt="%.6f")

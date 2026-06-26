@@ -196,6 +196,7 @@ def search_phases(
     refinement_params = {**DEFAULT_REFINEMENT_PARAMS, **refinement_params}
     
     downsized_path = None
+    original_pattern_path = pattern_path 
 
     try:
         if downsized_length is not None:
@@ -203,7 +204,6 @@ def search_phases(
             time_suffix = str(int(time.time() * 1000))
             down_size_dir = parent_dir / (parent_dir.stem + "_downsized")
             os.makedirs(down_size_dir, exist_ok=True)
-            original_pattern_path = pattern_path  # keep the original
             downsized_pattern_path = down_size_dir / f"{pattern_path.stem}_downsized_{time_suffix}.xy"
 
             # Convert to XY
