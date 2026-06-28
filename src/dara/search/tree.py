@@ -981,10 +981,6 @@ class BaseSearchTree(Tree):
 
         all_possible_nodes = all_possible_nodes[::-1]
 
-        foms = [
-            tuple([node.data.fom or 0 for node in possible_nodes])
-            for possible_nodes in all_possible_nodes
-        ]
         phases = [
             (pinned_phase,)
             for pinned_phase in all_possible_nodes[0][
@@ -994,9 +990,19 @@ class BaseSearchTree(Tree):
             tuple([node.data.current_phases[-1] for node in possible_nodes])
             for possible_nodes in all_possible_nodes[1:]
         ]
+        foms = [
+            (all_possible_nodes[0][0].data.fom or 0,)
+            for _ in all_possible_nodes[0][0].data.current_phases  # root node
+        ] + [
+            tuple([node.data.fom or 0 for node in possible_nodes])
+            for possible_nodes in all_possible_nodes[1:]
+        ]
         lattice_strains = [
+            (all_possible_nodes[0][0].data.lattice_strain or 0,)
+            for _ in all_possible_nodes[0][0].data.current_phases  # root node
+        ] + [
             tuple([node.data.lattice_strain or 0 for node in possible_nodes])
-            for possible_nodes in all_possible_nodes
+            for possible_nodes in all_possible_nodes[1:]
         ]
 
         return phases, foms, lattice_strains
