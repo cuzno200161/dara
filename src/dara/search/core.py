@@ -140,6 +140,7 @@ def search_phases(
     instrument_profile: str | Path = "Aeris-fds-Pixcel1d-Medipix3",
     express_mode: bool = True,
     enable_angular_cut: bool = True,
+    maximum_grouping_distance: float = 0.1,
     phase_params: dict[str, ...] | None = None,
     refinement_params: dict[str, ...] | None = None,
     return_search_tree: bool = False,
@@ -167,6 +168,7 @@ def search_phases(
             searching, which can significantly speed up the search process.
         enable_angular_cut: whether to enable angular cut, which will run the search on a reduced pattern range
             (wmin, wmax) to speed up the search process.
+        maximum_grouping_distance: the maximum distance between phases to be grouped together
         phase_params: the parameters for the phase search
         refinement_params: the parameters for the refinement
         return_search_tree: whether to return the search tree. This is mainly used for debugging purposes.
@@ -196,6 +198,7 @@ def search_phases(
     refinement_params = {**DEFAULT_REFINEMENT_PARAMS, **refinement_params}
     
     downsized_path = None
+    original_pattern_path = pattern_path 
 
     try:
         if downsized_length is not None:
@@ -203,7 +206,6 @@ def search_phases(
             time_suffix = str(int(time.time() * 1000))
             down_size_dir = parent_dir / (parent_dir.stem + "_downsized")
             os.makedirs(down_size_dir, exist_ok=True)
-            original_pattern_path = pattern_path  # keep the original
             downsized_pattern_path = down_size_dir / f"{pattern_path.stem}_downsized_{time_suffix}.xy"
 
             # Convert to XY
@@ -230,6 +232,7 @@ def search_phases(
             instrument_profile=instrument_profile,
             express_mode=express_mode,
             enable_angular_cut=enable_angular_cut,
+            maximum_grouping_distance=maximum_grouping_distance,
             max_phases=max_phases,
             rpb_threshold=rpb_threshold,
             overfitting_threshold=overfitting_threshold,
