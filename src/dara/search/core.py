@@ -233,7 +233,7 @@ def search_phases(
             express_mode=express_mode,
             enable_angular_cut=enable_angular_cut,
             maximum_grouping_distance=maximum_grouping_distance,
-            max_phases=max_phases,
+            max_phases=max_phases + len(pinned_phases) if pinned_phases else max_phases,
             rpb_threshold=rpb_threshold,
             overfitting_threshold=overfitting_threshold,
             false_peak_threshold=false_peak_threshold,
