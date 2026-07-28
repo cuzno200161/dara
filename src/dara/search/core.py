@@ -15,6 +15,7 @@ import ray
 import numpy as np
 
 from dara.search.tree import BaseSearchTree, SearchTree
+from dara.search.phase_grouping import GroupingMetric
 from dara.xrd import rasx2xy, raw2xy, xrdml2xy
 from pathlib import Path
 
@@ -152,6 +153,7 @@ def search_phases(
     overfitting_threshold: float = 2.0,
     strain_threshold: float = 0.02,
     early_stopping: bool = False,
+    grouping_metric: GroupingMetric = "legacy_jaccard",
 ) -> list[SearchResult] | SearchTree:
     """
     Search for the best phases to use for refinement.
@@ -169,6 +171,12 @@ def search_phases(
         enable_angular_cut: whether to enable angular cut, which will run the search on a reduced pattern range
             (wmin, wmax) to speed up the search process.
         maximum_grouping_distance: the maximum distance between phases to be grouped together
+        grouping_metric: which similarity metric to use for phase grouping --
+            "legacy_jaccard" (default, today's asymmetric greedy-matched
+            pseudo-Jaccard metric) or "gaussian_cosine" (a symmetric,
+            density-normalized alternative -- see dara.search.phase_grouping
+            module docstring). Defaults to "legacy_jaccard" so behavior is
+            unchanged unless explicitly opted into.
         phase_params: the parameters for the phase search
         refinement_params: the parameters for the refinement
         return_search_tree: whether to return the search tree. This is mainly used for debugging purposes.
@@ -241,6 +249,7 @@ def search_phases(
             record_peak_matcher_scores=record_peak_matcher_scores,
             score_coefficients=score_coefficients,
             early_stopping=early_stopping,
+            grouping_metric=grouping_metric,
         )
 
         max_worker = ray.cluster_resources()["CPU"]

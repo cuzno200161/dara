@@ -26,13 +26,19 @@ from dara.peak_detection import detect_peaks
 from dara.refine import RefinementPhase
 from dara.search.data_model import SearchNodeData, SearchResult
 from dara.search.peak_matcher import PeakMatcher, DEFAULT_ANGLE_TOLERANCE
+from dara.search.phase_grouping import (
+    GroupingMetric,
+    calculate_fom_and_strain,
+    group_phases,
+    is_integer_compound,
+    select_group_winner,
+)
 from dara.utils import (
     find_optimal_intensity_threshold,
     find_optimal_score_threshold,
     get_logger,
     get_number,
     get_optimal_max_two_theta,
-    load_symmetrized_structure,
     parse_refinement_param,
     rpb,
 )
@@ -158,158 +164,6 @@ def batch_refinement(
         for cif_paths in cif_paths
     ]
     return ray.get(handles)
-
-
-def calculate_fom_and_strain(
-    phase: RefinementPhase, result: RefinementResult
-) -> tuple[float, float]:
-    """
-    Calculate the figure of merit for a phase and lattice strain.
-
-    For more detail, refer to https://journals.iucr.org/j/issues/2019/03/00/nb5231/.
-    Args:
-        result: the refinement result
-
-    Returns
-    -------
-        the figure of merit of the target phase. If it cannot be calculated, return 0.
-    """
-    a = 1.0
-    # we disable the weight for now
-    b = 0.0
-    # we disable the particle size for now
-    c = 0.0
-    b1_threshold = 2e-5
-
-    phase_path = phase.path
-
-    structure, _ = load_symmetrized_structure(phase_path)
-    initial_lattice_abc = structure.lattice.abc
-
-    refined_a = result.lst_data.phases_results[phase_path.stem].a
-    refined_b = result.lst_data.phases_results[phase_path.stem].b
-    refined_c = result.lst_data.phases_results[phase_path.stem].c
-
-    geweicht = result.lst_data.phases_results[phase_path.stem].gewicht
-    geweicht = get_number(geweicht)
-
-    if hasattr(result.lst_data.phases_results[phase_path.stem], "B1"):
-        b1 = get_number(result.lst_data.phases_results[phase_path.stem].B1) or 0
-    else:
-        b1 = 0
-
-    if refined_a is None or geweicht is None:
-        return 0, 0
-
-    refined_lattice_abc = [
-        refined_a,
-        refined_b if refined_b is not None else refined_a,
-        refined_c if refined_c is not None else refined_a,
-    ]
-    refined_lattice_abc = [get_number(x) for x in refined_lattice_abc]
-
-    initial_lattice_abc = np.array(initial_lattice_abc) / 10  # convert to nm
-    refined_lattice_abc = np.array(refined_lattice_abc)
-
-    delta_u = (
-        np.sum(np.abs(initial_lattice_abc - refined_lattice_abc) / initial_lattice_abc)
-        * 100
-    )
-
-    lattice_strain = np.mean(
-        (refined_lattice_abc - initial_lattice_abc) / initial_lattice_abc
-    )
-
-    if b1 is None or b1 < b1_threshold:
-        c = 0
-    else:
-        c /= b1
-
-    return (1 / (result.lst_data.rho + a * delta_u + 1e-4) + b * geweicht) / (
-        1 + c
-    ), lattice_strain
-
-
-def group_phases(
-    all_phases_result: dict[RefinementPhase, RefinementResult | None],
-    distance_threshold: float = 0.05,
-) -> dict[RefinementPhase, dict[str, float | int]]:
-    """
-    Group the phases based on their similarity.
-
-    Args:
-        all_phases_result: the result of all the phases
-        distance_threshold: the distance threshold for clustering, default to 0.10
-
-    Returns
-    -------
-        a dictionary containing the group id and the figure of merit for each phase
-    """
-    grouped_result = {}
-
-    # handle the case where there is no result for a phase
-    for phase, result in all_phases_result.items():
-        if result is None:
-            grouped_result[phase] = {"group_id": -1, "fom": 0, "lattice_strain": 0}
-
-    all_phases_result = {
-        phase: result
-        for phase, result in all_phases_result.items()
-        if result is not None
-    }
-
-    if len(all_phases_result) <= 1:
-        for phase, result in all_phases_result.items():
-            fom, lattice_strain = calculate_fom_and_strain(phase, result)
-            grouped_result[phase] = {
-                "group_id": 0,
-                "fom": fom,
-                "lattice_strain": lattice_strain,
-            }
-        return grouped_result
-
-    peaks = []
-
-    for phase, result in all_phases_result.items():
-        all_peaks = result.peak_data
-        peaks.append(
-            all_peaks[all_peaks["phase"] == phase.path.stem][
-                ["2theta", "intensity"]
-            ].values
-        )
-        #print(f'DEBUG phase {phase.path.stem} peaks: {peaks[-1]}')
-
-    #print('DEBUG calculating pairwise similarity matrix...')
-    pairwise_similarity = batch_peak_matching(
-        [p for p in peaks for _ in peaks],
-        [p for _ in peaks for p in peaks],
-        return_type="jaccard",
-    )
-    distance_matrix = 1 - np.array(pairwise_similarity).reshape(len(peaks), len(peaks))
-
-    # current peak matching algorithm is not a symmetric metric.
-    distance_matrix = (distance_matrix + distance_matrix.T) / 2
-
-    # clustering
-    clusterer = AgglomerativeClustering(
-        n_clusters=None,
-        distance_threshold=distance_threshold,
-        metric="precomputed",
-        linkage="average",
-    )
-    clusterer.fit(distance_matrix)
-
-    for i, cluster in enumerate(clusterer.labels_):
-        phase = list(all_phases_result.keys())[i]
-        result = list(all_phases_result.values())[i]
-        fom, lattice_strain = calculate_fom_and_strain(phase, result)
-        grouped_result[phase] = {
-            "group_id": cluster,
-            "fom": fom,
-            "lattice_strain": lattice_strain,
-        }
-
-    return grouped_result
 
 
 def remove_unnecessary_phases(
@@ -505,12 +359,14 @@ class BaseSearchTree(Tree):
         score_coefficients: dict[str, float] | None = None,
         early_stopping: bool = False,
         phase_strikes: dict | None = None,
+        grouping_metric: GroupingMetric = "legacy_jaccard",
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
 
         self.pattern_path = pattern_path
+        self.grouping_metric = grouping_metric
         self.rpb_threshold = rpb_threshold
         self.overfitting_threshold = overfitting_threshold
         self.strain_threshold = strain_threshold
@@ -692,6 +548,7 @@ class BaseSearchTree(Tree):
             grouped_results = group_phases(
                 new_results,
                 distance_threshold=self.maximum_grouping_distance,
+                grouping_metric=self.grouping_metric,
             )
 
             # if express mode is on, we will put all the phases in its own group
@@ -712,16 +569,17 @@ class BaseSearchTree(Tree):
                 group_id = grouped_results[phase]["group_id"]
                 fom = grouped_results[phase]["fom"]
                 
-                def is_integer_compound(p):
-                    return not bool(re.search(r'\d+\.\d+', p.path.name))
-
-                is_best_result_in_group = phase == max(
-                    [
-                        phase_
-                        for phase_ in grouped_results
-                        if grouped_results[phase_]["group_id"] == group_id
-                    ],
-                    key=lambda x: (is_integer_compound(x), grouped_results[x]["fom"]),
+                group_members = [
+                    {
+                        "phase": phase_,
+                        "fom": grouped_results[phase_]["fom"],
+                        "is_ordered": grouped_results[phase_]["is_ordered"],
+                    }
+                    for phase_ in grouped_results
+                    if grouped_results[phase_]["group_id"] == group_id
+                ]
+                is_best_result_in_group = (
+                    phase == select_group_winner(group_members)["phase"]
                 )
 
                 #if new_result is not None:
@@ -1284,6 +1142,7 @@ class SearchTree(BaseSearchTree):
         record_peak_matcher_scores: bool = False,
         score_coefficients: dict[str, float] | None = None,
         early_stopping: bool = False,
+        grouping_metric: GroupingMetric = "legacy_jaccard",
         *args,
         **kwargs,
     ):
@@ -1326,6 +1185,7 @@ class SearchTree(BaseSearchTree):
             score_coefficients,
             early_stopping,
             *args,
+            grouping_metric=grouping_metric,
             **kwargs,
         )
 
@@ -1360,6 +1220,7 @@ class SearchTree(BaseSearchTree):
             phases_grouped = group_phases(
                 grouping_input,
                 distance_threshold=self.maximum_grouping_distance,
+                grouping_metric=self.grouping_metric,
             )
             
             phase_group_mapping = {}
@@ -1372,31 +1233,25 @@ class SearchTree(BaseSearchTree):
                         "phase": phase,
                         "fom": phases_grouped[phase]["fom"],
                         "lattice_strain": phases_grouped[phase]["lattice_strain"],
+                        "is_ordered": phases_grouped[phase]["is_ordered"],
                         "is_pinned": phase in self.pinned_phases
                     }
                 )
 
             # Filter candidates for search
-            def is_integer_compound(p):
-                return not bool(re.search(r'\d+\.\d+', p.path.name))
-                
             final_candidates = {}
             for group, members in phase_group_mapping.items():
                 print(f"\n[DEBUG INIT] Processing Group {group} candidates:")
                 for m in members:
                     is_int = is_integer_compound(m["phase"])
-                    print(f"  -> Phase: {m['phase'].path.stem} | FOM: {m['fom']:.4f} | Is Integer: {is_int}")
+                    print(
+                        f"  -> Phase: {m['phase'].path.stem} | FOM: {m['fom']:.4f} | "
+                        f"Is Integer (legacy filename heuristic): {is_int} | "
+                        f"Is Ordered (structure.is_ordered): {m['is_ordered']}"
+                    )
 
-                # Separate integer and fractional members
-                integer_members = [m for m in members if is_integer_compound(m["phase"])]
-                
-                if len(integer_members) > 0:
-                    print(f"[DEBUG INIT] Integer compounds found. Prioritizing integer pool.")
-                    best_member = max(integer_members, key=lambda x: x["fom"])
-                else:
-                    print(f"[DEBUG INIT] ONLY fractional compounds found. Falling back to highest FOM.")
-                    best_member = max(members, key=lambda x: x["fom"])
-                
+                best_member = select_group_winner(members)
+
                 print(f"[DEBUG INIT] Selected Winner for Group {group}: {best_member['phase'].path.stem}")
 
                 # If the winner is a pinned phase, we do not add it to the search candidates.
