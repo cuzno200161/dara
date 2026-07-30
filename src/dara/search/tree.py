@@ -218,33 +218,42 @@ def calculate_result_score(result: SearchResult) -> float:
     return score
 
 def get_natural_break_results(
-    results: list[SearchResult], 
-    peak_obs: list[tuple[float, float]] | None = None, 
-    sorting: bool = True
+    results: list[SearchResult],
+    peak_obs: list[tuple[float, float]] | None = None,
+    sorting: bool = True,
+    top_n: int | None = 10,
 ) -> list[SearchResult]:
     """
-    Selecting best 10 results and displaying the ranked leaderboard.
+    Attach each result's composite ranking score (`SearchResult.score`) and,
+    if `sorting` is enabled, sort by that score (highest first) and keep only
+    the top `top_n` results. Pass `top_n=None` to keep every candidate found
+    during the search.
     """
     if not results:
         return []
 
+    # Attach the score to every candidate (not just the ones that survive truncation)
+    # so it is always available via `SearchResult.score`.
+    for res in results:
+        res.score = calculate_result_score(res)
+
     if sorting:
         # 1. Sort all results by score (highest score first)
-        results = sorted(results, key=lambda x: calculate_result_score(x), reverse=True)
-        
-        # 2. Slice to keep only the top 10
-        results = results[:10]
-        
+        results = sorted(results, key=lambda x: x.score, reverse=True)
+
+        # 2. Slice to keep only the top `top_n` (or keep all if top_n is None)
+        if top_n is not None:
+            results = results[:top_n]
+
         # 3. Print/Log the sorted leaderboard
         print("\n" + "="*30)
-        print(" TOP 10 RANKED RESULTS ")
+        print(f" TOP {len(results)} RANKED RESULTS ")
         print("="*30)
         for i, res in enumerate(results, 1):
-            score = calculate_result_score(res) # Re-calculating for display
             phases = ", ".join([p[0].path.stem for p in res.phases])
-            print(f"{i}. Score: {score:.2f} | {phases}")
+            print(f"{i}. Score: {res.score:.2f} | {phases}")
         print("="*30 + "\n")
-        
+
     return results
 
 def is_redundant_subset(result: SearchResult, peak_obs: list[tuple[float, float]] | None = None) -> bool:
@@ -1387,11 +1396,14 @@ class SearchTree(BaseSearchTree):
 
         return all_phases_result
 
-    def get_search_results(self) -> list[SearchResult]:
+    def get_search_results(self, top_n: int | None = 10) -> list[SearchResult]:
         """
         Get the search results.
 
         The search results are the results of the nodes that have been expanded and have no expandable children.
+        Each returned `SearchResult` has its composite ranking score available via `.score`
+        (see `calculate_result_score`). Results are sorted by that score, highest first, and
+        truncated to the top `top_n` (pass `top_n=None` to get every candidate found).
 
         Returns
         -------
@@ -1450,7 +1462,7 @@ class SearchTree(BaseSearchTree):
                         extra_peaks=node.data.isolated_extra_peaks,
                     )
                 )
-        return get_natural_break_results(results, self.peak_obs)
+        return get_natural_break_results(results, self.peak_obs, top_n=top_n)
 
     def show(
         self,

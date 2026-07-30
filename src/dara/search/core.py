@@ -145,6 +145,7 @@ def search_phases(
     phase_params: dict[str, ...] | None = None,
     refinement_params: dict[str, ...] | None = None,
     return_search_tree: bool = False,
+    top_n_results: int | None = 10,
     record_peak_matcher_scores: bool = False,
     score_coefficients: dict[str, float] | None = None,
     strike_threshold: int = 1,
@@ -180,6 +181,9 @@ def search_phases(
         phase_params: the parameters for the phase search
         refinement_params: the parameters for the refinement
         return_search_tree: whether to return the search tree. This is mainly used for debugging purposes.
+        top_n_results: how many of the top-ranked candidates to return, sorted by their composite
+            ranking score (`SearchResult.score`, highest first; see `dara.search.tree.calculate_result_score`).
+            Pass `None` to return every candidate found during the search, each with its `.score` populated.
         record_peak_matcher_scores: whether to record the peak matcher scores. This is mainly used for
             debugging purposes.
         score_coefficients: the coefficients for the peak match score calculation    
@@ -372,7 +376,7 @@ def search_phases(
                 pending.append(remote_expand_node(search_tree, nid, stop_flag, combination_registry, strike_registry))
 
         if not return_search_tree:
-            return search_tree.get_search_results()
+            return search_tree.get_search_results(top_n=top_n_results)
         return search_tree
     
     finally:

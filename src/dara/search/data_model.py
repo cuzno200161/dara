@@ -99,6 +99,14 @@ class SearchResult(BaseModel):
     lattice_strains: tuple[tuple[float, ...], ...]
     missing_peaks: Optional[list[list[float]]]
     extra_peaks: Optional[list[list[float]]]
+    score: Optional[float] = Field(
+        default=None,
+        description=(
+            "Composite ranking score used to rank this result against the other "
+            "candidates from the same search (see dara.search.tree.calculate_result_score). "
+            "Higher is better."
+        ),
+    )
 
     @property
     def grouped_phases(
