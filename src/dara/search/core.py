@@ -204,7 +204,6 @@ def search_phases(
         num_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", 8))
         #ray.init(num_cpus=num_cpus, local_mode=True)
         ray.init(num_cpus=num_cpus)
-        print("DEBUG: Ray resources:", ray.available_resources())
 
     phase_params = {**DEFAULT_PHASE_PARAMS, **phase_params}
     refinement_params = {**DEFAULT_REFINEMENT_PARAMS, **refinement_params}
@@ -308,7 +307,6 @@ def search_phases(
                                 search_tree.phase_strikes[attempted_phase] += 1
                                 current_strikes = search_tree.phase_strikes[attempted_phase]
                                 
-                                # print(f"DEBUG: Phase {attempted_phase.path.stem} strike {current_strikes}/3")
 
                                 if current_strikes >= strike_threshold:
                                     if attempted_phase in search_tree.all_phases_result:

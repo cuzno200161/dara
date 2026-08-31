@@ -94,7 +94,6 @@ def remote_peak_matching(
     results = []
 
     for peak_calc, peak_obs, peak_obs_orig in batch:
-        #print(f'DEBUG remote peak matching')
         pm = PeakMatcher(peak_calc, peak_obs, peak_obs_orig)
 
         if return_type == "PeakMatcher":
@@ -182,7 +181,6 @@ def remove_unnecessary_phases(
     original_rpb = rpb(y_calc, y_obs, y_bkg)
     
     new_phases = []
-    #print(f"DEBUG checking unnecessary phases {list(phases_results.keys())}")
 
     for excluded_phase in phases_results:
         # If this is the newly added phase, keep it automatically
@@ -193,7 +191,6 @@ def remove_unnecessary_phases(
         y_calc_excl = y_calc.copy()
         y_calc_excl -= phases_results[excluded_phase]
         new_rpb = rpb(y_calc_excl, y_obs, y_bkg)
-        #print(f"DEBUG Removing phase {excluded_phase}: original RPB = {original_rpb}, new RPB = {new_rpb}")
 
         if new_rpb > original_rpb + overfitting_threshold:
             new_phases.append(cif_paths_dict[excluded_phase])
@@ -318,7 +315,6 @@ def is_redundant_subset(result: SearchResult, peak_obs: list[tuple[float, float]
         covered_indices = matcher_subset.matched[1]
         coverage_ratio = len(covered_indices) / len(real_target_peaks)
         
-        print(f'DEBUG subset: Phase {phase_name} | Real Peaks: {len(real_target_peaks)} | Covered by Others: {len(covered_indices)} | Ratio: {coverage_ratio:.2f}')
 
         if coverage_ratio > 0.95:
             return True
@@ -425,10 +421,6 @@ class BaseSearchTree(Tree):
         
         max_false_peak_intensity = max(max_extra_peak_intensity, max_missing_peak_intensity)
         
-        #print(f'DEBUG new_result.peak_data: {new_result.peak_data[["2theta", "intensity"]] if new_result is not None else None}')
-        #print(f'DEBUG isolated_missing_peaks: {isolated_missing_peaks}')
-        #print(f'DEBUG isolated_extra_peaks: {isolated_extra_peaks}')
-        #print(f'DEBUG max_false_peak_intensity: {max_false_peak_intensity}, number of false peaks: {len(isolated_missing_peaks) + len(isolated_extra_peaks)}')
 
         if max_false_peak_intensity < self.false_peak_threshold and \
                 len(isolated_missing_peaks) + len(isolated_extra_peaks) <= 3 and \
@@ -470,14 +462,12 @@ class BaseSearchTree(Tree):
                 
             # remove phases that are already in the current result
             current_phases_set = set(node.data.current_phases)
-            #print(f'DEBUG current phases set: {[p.path.stem for p in current_phases_set]}')
             all_phases_result = {
                 phase: result
                 for phase, result in self.all_phases_result.items()
                 if phase not in current_phases_set
             }
             
-            #print(f'DEBUG all_phases_result: {[p.path.stem for p in all_phases_result.keys()]}')
             
             if not all_phases_result:
                 node.data.status = "expanded"
@@ -503,14 +493,6 @@ class BaseSearchTree(Tree):
             #        logger.info(f"ROOT PRUNING: Reduced candidates from {len(best_phases)} to {len(kept_phases)} (Top-{TOP_K}).")
             #        best_phases = kept_phases
             
-            for phase, score in raw_scores.items():
-                print(f'DEBUG phase {phase.path.stem} raw scores = {score}')
-            for phase, score in scores.items():
-                print(f'DEBUG phase {phase.path.stem} preliminary score = {score}')
-            for phase, score in best_phases.items():
-                print(f'DEBUG best phases {phase.path.stem} score = {score}')
-            print(f'DEBUG : threshold = {threshold}')
-            print(f'DEBUG best phases: {[phase.path.stem for phase in best_phases]}')
 
             if self.record_peak_matcher_scores:
                 node.data.peak_matcher_scores = scores
@@ -521,7 +503,6 @@ class BaseSearchTree(Tree):
             
             # We collect the reservations we need to make first to batch the remote call 
             for phase, score in best_phases.items():
-                #print(f'DEBUG evaluating phase {phase.path.stem} with preliminary score {score}')
                 potential_phases = [*node.data.current_phases, phase]
                 phase_names = [p.path.stem for p in potential_phases]
 
@@ -548,7 +529,6 @@ class BaseSearchTree(Tree):
                 final_candidates[phase] = score
 
             # Replace 'best_phases' with 'final_candidates' for the expensive refinement
-            print(f'DEBUG refining current phases {[p.path.stem for p in node.data.current_phases]} with candidate phases: {[phase.path.stem for phase in final_candidates]}')
             new_results = self.refine_phases(
                 final_candidates, pinned_phases=node.data.current_phases
             )
@@ -567,13 +547,10 @@ class BaseSearchTree(Tree):
 
             for phase, new_result in new_results.items():
                 if stop_flag is not None and ray.get(stop_flag.get.remote()):
-                    #print('DEBUG early stopping activated, break expansion loop')
                     break
 
                 new_phases = [*node.data.current_phases, phase]
 
-                #print(f'DEBUG current node phases: {[p.path.stem for p in node.data.current_phases]}')
-                #print(f'DEBUG evaluating phase {phase.path.stem}')
 
                 group_id = grouped_results[phase]["group_id"]
                 fom = grouped_results[phase]["fom"]
@@ -623,10 +600,6 @@ class BaseSearchTree(Tree):
                     isolated_missing_peaks = []
                     isolated_extra_peaks = []
 
-                #print(f"DEBUG current phases: {[p.path.stem for p in node.data.current_phases]}")
-                #print(f'DEBUG current node rpb: {node.data.current_result.lst_data.rpb if node.data.current_result is not None else None}')    
-                #print(f'DEBUG new phases: {[p.path.stem for p in new_phases]}')
-                #print(f'DEBUG new_result rpb: {new_result.lst_data.rpb if new_result is not None else None}')
 
                 #parent_isolated_extra_peaks = node.data.isolated_extra_peaks if node.data.isolated_extra_peaks is not None else []
 
@@ -638,7 +611,6 @@ class BaseSearchTree(Tree):
                 #elif (len(isolated_extra_peaks) > 0 and \
                 #      np.max(isolated_extra_peaks[:, 1]) / max(new_result.plot_data.y_obs) > 2 * self.false_peak_threshold
                 #):
-                #    print(f'DEBUG isolated_extra_peaks: {isolated_extra_peaks}')
                 #    status = "extra_peaks"
             
                 elif abs(grouped_results[phase]["lattice_strain"]) > self.strain_threshold:
@@ -709,7 +681,6 @@ class BaseSearchTree(Tree):
                         parent=nid,
                     )
 
-                    #print('DEBUG early stopping condition met, node created, flag set')
                     
                     # Set the global early stop flag
                     #if stop_flag is not None:
@@ -886,7 +857,6 @@ class BaseSearchTree(Tree):
             residual_peaks = self.peak_obs
         else:
             # We still need a matcher here to determine the residuals relative to the current result
-            #print('DEBUG getting residual peaks for current result...')
             res_matcher = PeakMatcher(
                 current_result.peak_data[["2theta", "intensity"]].values, 
                 self.peak_obs,
@@ -895,7 +865,6 @@ class BaseSearchTree(Tree):
             residual_peaks = res_matcher.missing
             
             #for missing_peak in missing_peaks:
-            #    print(f'DEBUG RESIDUAL missing_peak peak: {missing_peak}')
 
         if len(residual_peaks) == 0: 
             return {}, {}, {}, 0.0
@@ -1250,18 +1219,9 @@ class SearchTree(BaseSearchTree):
             # Filter candidates for search
             final_candidates = {}
             for group, members in phase_group_mapping.items():
-                print(f"\n[DEBUG INIT] Processing Group {group} candidates:")
-                for m in members:
-                    is_int = is_integer_compound(m["phase"])
-                    print(
-                        f"  -> Phase: {m['phase'].path.stem} | FOM: {m['fom']:.4f} | "
-                        f"Is Integer (legacy filename heuristic): {is_int} | "
-                        f"Is Ordered (structure.is_ordered): {m['is_ordered']}"
-                    )
 
                 best_member = select_group_winner(members)
 
-                print(f"[DEBUG INIT] Selected Winner for Group {group}: {best_member['phase'].path.stem}")
 
                 # If the winner is a pinned phase, we do not add it to the search candidates.
                 # If the winner is a regular phase, we add it.
@@ -1306,12 +1266,10 @@ class SearchTree(BaseSearchTree):
             nthreads=os.cpu_count(),
         )
         time_end = time.time()
-        #print(f"DEBUG Peak detection took {time_end - time_start:.2f} seconds.")
         if len(peak_list) == 0:
             raise ValueError("No peaks are detected in the pattern.")
 
         peak_list_array = peak_list[["2theta", "intensity"]].values
-        print(f"DEBUG peak detection: {peak_list_array}")
 
         if self.enable_angular_cut:
             optimal_wmax = get_optimal_max_two_theta(peak_list)
@@ -1372,7 +1330,6 @@ class SearchTree(BaseSearchTree):
             pinned_phases=self.pinned_phases,
         )
         time_end = time.time()
-        #print(f"DEBUG Initial refinement of all phases took {time_end - time_start:.2f} seconds.")
 
 
 

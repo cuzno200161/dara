@@ -68,7 +68,6 @@ def find_best_match(
     sorted_indices = np.argsort(peak_calc[:, 1])[::-1]
     
     #for peak in peak_calc:
-    #    print(f'DEBUG peak_calc: {peak}')
     
     for peak_idx in sorted_indices:
         peak = peak_calc[peak_idx]
@@ -332,11 +331,6 @@ class PeakMatcher:
         I_overlap = np.sum(np.abs(self.overlap[0][:, 1])) if len(self.overlap[0]) > 0 else 0
         I_obs_total = np.sum(np.abs(self.peak_obs[:, 1])) + 1e-12
 
-        #print(f'DEBUG matched: {matched_peaks}')
-        #print(f'DEBUG wrong intensity: {wrong_intens_peaks}')
-        #print(f'DEBUG missing: {self.missing}')
-        #print(f'DEBUG extra: {self.extra}')
-        #print(f'DEBUG overlap: {self.overlap}')
 
         return self.calculate_intensity_score(
             I_matched, I_wrong, I_missing, I_extra, I_overlap, I_obs_total, 
@@ -396,8 +390,6 @@ class PeakMatcher:
         min_intensity = self.peak_obs[:, 1].max() * min_intensity_ratio
         
         #for peak in peaks:
-        #    print(f'DEBUG {peak_type} peak: {peak}')
-        #print(f'DEBUG peak_obs_orig: {self.peak_obs}')
 
         return peaks[(distance > min_angle_difference) & (peaks[:, 1] > min_intensity)]
 

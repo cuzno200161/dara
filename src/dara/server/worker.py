@@ -32,7 +32,6 @@ def run_job(uuid):
         if not ray.is_initialized():
             num_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", 4))
             ray.init(num_cpus=num_cpus, _metrics_export_port=None)
-            #print("DEBUG: Ray resources:", ray.available_resources())
 
         job = worker_store.query_one(criteria={"uuid": uuid})
         job["start_time"] = datetime.now(tz=timezone.utc)
