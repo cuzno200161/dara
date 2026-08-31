@@ -201,7 +201,7 @@ def search_phases(
         refinement_params = {}
 
     if not ray.is_initialized():
-        num_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", 8))
+        num_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", 32))
         #ray.init(num_cpus=num_cpus, local_mode=True)
         ray.init(num_cpus=num_cpus)
 
