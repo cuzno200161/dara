@@ -4,8 +4,6 @@ from __future__ import annotations
 import copy
 from collections import defaultdict, deque
 import time
-from traceback import print_exc
-from turtle import done
 from typing import TYPE_CHECKING, Literal
 import os
 
@@ -16,6 +14,7 @@ import numpy as np
 
 from dara.search.tree import BaseSearchTree, SearchTree
 from dara.search.phase_grouping import GroupingMetric
+from dara.utils import get_logger
 from dara.xrd import rasx2xy, raw2xy, xrdml2xy
 from pathlib import Path
 
@@ -24,6 +23,8 @@ from scipy.ndimage import gaussian_filter1d
 if TYPE_CHECKING:
     from dara.refine import RefinementPhase
     from dara.search.data_model import SearchResult
+
+logger = get_logger(__name__)
 
 DEFAULT_PHASE_PARAMS = {
     "gewicht": "0_0",
@@ -93,10 +94,10 @@ def _remote_expand_node(search_tree: BaseSearchTree, stop_flag, combination_regi
         search_tree.expand_root(stop_flag, combination_registry, strike_registry) 
         return search_tree
     except ray.exceptions.TaskCancelledError:
-        print("Task was cancelled remotely. Returning current state.")
+        logger.info("Task was cancelled remotely. Returning current state.")
         return search_tree  # Return the tree as it is even if partial
     except Exception as e:
-        print_exc()
+        logger.exception("Phase search failed.")
         raise e
 
 
@@ -154,7 +155,7 @@ def search_phases(
     overfitting_threshold: float = 2.0,
     strain_threshold: float = 0.02,
     early_stopping: bool = False,
-    grouping_metric: GroupingMetric = "legacy_jaccard",
+    grouping_metric: GroupingMetric = "gaussian_cosine",
 ) -> list[SearchResult] | SearchTree:
     """
     Search for the best phases to use for refinement.
@@ -173,11 +174,12 @@ def search_phases(
             (wmin, wmax) to speed up the search process.
         maximum_grouping_distance: the maximum distance between phases to be grouped together
         grouping_metric: which similarity metric to use for phase grouping --
-            "legacy_jaccard" (default, today's asymmetric greedy-matched
-            pseudo-Jaccard metric) or "gaussian_cosine" (a symmetric,
-            density-normalized alternative -- see dara.search.phase_grouping
-            module docstring). Defaults to "legacy_jaccard" so behavior is
-            unchanged unless explicitly opted into.
+            "gaussian_cosine" (default, symmetric by construction and
+            density-normalized -- see dara.search.phase_grouping module
+            docstring) or "legacy_jaccard" (the older asymmetric
+            greedy-matched pseudo-Jaccard metric, kept for backward
+            compatibility; pass it explicitly to reproduce pre-validation
+            behavior).
         phase_params: the parameters for the phase search
         refinement_params: the parameters for the refinement
         return_search_tree: whether to return the search tree. This is mainly used for debugging purposes.
@@ -285,7 +287,7 @@ def search_phases(
                         
                         if duplicate_id:
                             # Mark this new node as 'duplicate' so it is NOT added to the queue
-                            print(f"Race condition caught: {nid} is a duplicate of {duplicate_id}. Pruning.")
+                            logger.info(f"Race condition caught: {nid} is a duplicate of {duplicate_id}. Pruning.")
                             node.data.status = "duplicate"
                     
                     search_tree.add_subtree(anchor_nid=remote_search_tree.root, search_tree=remote_search_tree)
@@ -310,7 +312,7 @@ def search_phases(
 
                                 if current_strikes >= strike_threshold:
                                     if attempted_phase in search_tree.all_phases_result:
-                                        print(f"Phase {attempted_phase.path.stem} reached {strike_threshold} strikes (no_improvement). Permanently removing from search.")
+                                        logger.info(f"Phase {attempted_phase.path.stem} reached {strike_threshold} strikes (no_improvement). Permanently removing from search.")
                                         del search_tree.all_phases_result[attempted_phase]
                                         
                     # Check if this is the winner
@@ -331,22 +333,22 @@ def search_phases(
             # 2. Check the Kill Conditions
             # Condition A: we have the result in hand.
             if early_stop_found:
-                print("Refinement result: Early stop found. Terminating all other workers.")
+                logger.info("Refinement result: Early stop found. Terminating all other workers.")
                 to_be_submitted.clear()
                 for task_ref in pending:
                     ray.cancel(task_ref, force=True, recursive=True)
                 pending = []
                 break
 
-            # Condition B: The global flag is set 
+            # Condition B: The global flag is set
             if ray.get(stop_flag.get.remote()):
-                print("Stop flag detected. Retrieving winning result...")
+                logger.info("Stop flag detected. Retrieving winning result...")
                 to_be_submitted.clear() # Stop new work
-                
+
                 while pending:
                     # Wait for the NEXT task to finish
                     done_drain, pending = ray.wait(pending, num_returns=1)
-                    
+
                     for task in done_drain:
                         try:
                             remote_search_tree = ray.get(task)
@@ -355,11 +357,11 @@ def search_phases(
                                 if any(node.data.status == "early_stop" for node in remote_search_tree.nodes.values()):
                                     early_stop_found = True
                         except Exception:
-                            pass
-                    
+                            logger.exception("Failed to retrieve/merge a remote search-tree task while draining after stop flag.")
+
                     # Kill everyone else immediately.
                     if early_stop_found:
-                        print("Winner retrieved. Killing remaining tasks.")
+                        logger.info("Winner retrieved. Killing remaining tasks.")
                         for task_ref in pending:
                             ray.cancel(task_ref, force=True, recursive=True)
                         pending = []
@@ -385,4 +387,4 @@ def search_phases(
                 if not os.listdir(down_size_dir):
                     os.rmdir(down_size_dir)
             except Exception as e:
-                print(f"Warning: Could not remove temporary file {downsized_path}: {e}")
+                logger.warning(f"Could not remove temporary file {downsized_path}: {e}")

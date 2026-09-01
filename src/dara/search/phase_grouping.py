@@ -3,33 +3,29 @@ Phase-grouping logic: deciding which candidate crystal structures are
 "practically indistinguishable via powder XRD" and should be merged into one
 answer during search.
 
-This module is being incrementally rewritten (see the phase-grouping rewrite
-plan). Stage 1: pure extraction of the existing logic out of tree.py, with
-the two previously duplicated winner-selection blocks (in
-SearchTree.expand_node and SearchTree.__init__) consolidated into one shared
-function -- no behavior change. Stage 2 (current): a new similarity+
-clustering core, `peak_pattern_similarity`/`cluster_phases`, available
-alongside the legacy metric behind an explicit `grouping_metric` flag that
-still defaults to `"legacy_jaccard"` -- nothing changes for existing callers
-until the flag is deliberately flipped (a later stage, after re-validating
-against the experimental_eval sweep harness).
-
-Two similarity metrics coexist during the transition:
-  - "legacy_jaccard": `PeakMatcher.jaccard_index()` via `batch_peak_matching`
-    -- greedy, many-to-one, intensity-descending peak matching. Confirmed
-    asymmetric by construction (A->B != B->A), patched with a post-hoc
-    (D + D.T)/2 symmetrization that does not restore the triangle
-    inequality AgglomerativeClustering implicitly relies on. Also has no
-    normalization for differing peak-list density between two phases.
-  - "gaussian_cosine" (`peak_pattern_similarity`): symmetric BY
+Two similarity metrics are supported via the `grouping_metric` flag:
+  - "gaussian_cosine" (`peak_pattern_similarity`, the default): symmetric BY
     CONSTRUCTION, L2-intensity-normalized (so a phase's total "similarity
     budget" is capped at 1.0 regardless of how many peaks it has --
     directly fixes the density-bias failure mode confirmed on a real
     Fe2O3_92 (367 peaks) vs. TiO2_136 (20 peaks) comparison, where naive
     position-overlap looked artificially high purely because one pattern
-    is dense). Ported from galaxi's own `calculate_peak_similarity`
-    (`galaxi/src/galaxi/core/pattern_utils.py`), hardened with a weak-peak
-    intensity floor applied before normalization.
+    is dense). Validated against the experimental_eval sweep harness before
+    becoming the default. The core similarity function mirrors galaxi's
+    `calculate_peak_similarity` (`galaxi/src/galaxi/core/pattern_utils.py`)
+    -- the two projects deliberately keep independent copies since each
+    calls it in a different context (grouping here vs. scoring there); if
+    the similarity formula changes in one, check whether the other should
+    follow. This copy adds a weak-peak intensity floor applied before
+    normalization.
+  - "legacy_jaccard": `PeakMatcher.jaccard_index()` via `batch_peak_matching`
+    -- greedy, many-to-one, intensity-descending peak matching. Asymmetric
+    by construction (A->B != B->A), patched with a post-hoc (D + D.T)/2
+    symmetrization that does not restore the triangle inequality
+    AgglomerativeClustering implicitly relies on, and has no normalization
+    for differing peak-list density between two phases. Kept only for
+    backward compatibility with callers that relied on its exact behavior;
+    pass `grouping_metric="legacy_jaccard"` explicitly to use it.
 """
 from __future__ import annotations
 
@@ -215,23 +211,19 @@ GroupingMetric = Literal["legacy_jaccard", "gaussian_cosine"]
 def group_phases(
     all_phases_result: dict[RefinementPhase, "RefinementResult | None"],
     distance_threshold: float = 0.05,
-    grouping_metric: GroupingMetric = "legacy_jaccard",
+    grouping_metric: GroupingMetric = "gaussian_cosine",
 ) -> dict[RefinementPhase, dict[str, float | int]]:
     """
     Group the phases based on their similarity.
 
     Args:
         all_phases_result: the result of all the phases
-        distance_threshold: the distance threshold for clustering, default to 0.10
-        grouping_metric: which similarity metric to use -- "legacy_jaccard"
-            (today's default, the asymmetric greedy-matched pseudo-Jaccard
-            metric, patched with a (D+D.T)/2 symmetrization) or
-            "gaussian_cosine" (the new symmetric, density-normalized metric;
-            see module docstring). Defaults to "legacy_jaccard" so nothing
-            changes for existing callers until this is explicitly opted into
-            and validated (a later rewrite stage re-sweeps
-            `maximum_grouping_distance`'s optimal value under the new metric
-            before flipping this default).
+        distance_threshold: the distance threshold for clustering, default to 0.05
+        grouping_metric: which similarity metric to use -- "gaussian_cosine"
+            (default, the symmetric, density-normalized metric; see module
+            docstring) or "legacy_jaccard" (the older asymmetric
+            greedy-matched pseudo-Jaccard metric, patched with a
+            (D+D.T)/2 symmetrization; kept for backward compatibility).
 
     Returns
     -------

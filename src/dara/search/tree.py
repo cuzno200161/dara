@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import os
 import warnings
 from itertools import zip_longest
 from numbers import Number
@@ -242,14 +241,12 @@ def get_natural_break_results(
         if top_n is not None:
             results = results[:top_n]
 
-        # 3. Print/Log the sorted leaderboard
-        print("\n" + "="*30)
-        print(f" TOP {len(results)} RANKED RESULTS ")
-        print("="*30)
+        # 3. Log the sorted leaderboard
+        leaderboard_lines = [f" TOP {len(results)} RANKED RESULTS "]
         for i, res in enumerate(results, 1):
             phases = ", ".join([p[0].path.stem for p in res.phases])
-            print(f"{i}. Score: {res.score:.2f} | {phases}")
-        print("="*30 + "\n")
+            leaderboard_lines.append(f"{i}. Score: {res.score:.2f} | {phases}")
+        logger.info("\n" + "\n".join(leaderboard_lines))
 
     return results
 
@@ -333,7 +330,8 @@ class BaseSearchTree(Tree):
         phase_params: the phase parameters, it will be passed to the refinement function.
         intensity_threshold: the intensity threshold to tell if a peak is significant
         instrument_profile: the name/path of the instrument file, it will be passed to the refinement function.
-        maximum_grouping_distance: the maximum grouping distance, default to 0.1
+        maximum_grouping_distance: the maximum grouping distance (required here;
+            see SearchTree, which supplies a default of 0.05)
         max_phases: the maximum number of phases
         rpb_threshold: the minimum RPB improvement in each step
         overfitting_threshold: the overfitting threshold
@@ -364,7 +362,7 @@ class BaseSearchTree(Tree):
         score_coefficients: dict[str, float] | None = None,
         early_stopping: bool = False,
         phase_strikes: dict | None = None,
-        grouping_metric: GroupingMetric = "legacy_jaccard",
+        grouping_metric: GroupingMetric = "gaussian_cosine",
         *args,
         **kwargs,
     ):
@@ -509,7 +507,7 @@ class BaseSearchTree(Tree):
                 if strike_registry is not None:
                     # Check if any phase in this potential combination is struck out
                     if ray.get(strike_registry.check_strikes.remote(phase_names)):
-                        print(f"Skipping phase combination {[p.path.stem for p in potential_phases]} due to strikes.")
+                        logger.info(f"Skipping phase combination {[p.path.stem for p in potential_phases]} due to strikes.")
                         continue
                 
                 # 1. Local Check
@@ -568,25 +566,6 @@ class BaseSearchTree(Tree):
                     phase == select_group_winner(group_members)["phase"]
                 )
 
-                #if new_result is not None:
-                #    searched_phases = [
-                #        p for p in new_phases if p not in self.pinned_phases
-                #    ]
-                #    sorted_searched_phases = sorted(
-                #        searched_phases,
-                #        key=lambda phase: new_result.peak_data[
-                #            new_result.peak_data["phase"] == phase.path.stem
-                #        ]["intensity"].sum(),
-                #        reverse=True,
-                #    )
-                #    # make sure the newly added phase has the lowest peak intensity
-                #    is_low_weight_fraction = (
-                #        sorted_searched_phases[-1] != searched_phases[-1]
-                #    )
-                #else:
-                #    is_low_weight_fraction = False
-                
-
                 if new_result is not None:
                     peak_matcher = PeakMatcher(
                         new_result.peak_data[["2theta", "intensity"]].values,
@@ -601,22 +580,12 @@ class BaseSearchTree(Tree):
                     isolated_extra_peaks = []
 
 
-                #parent_isolated_extra_peaks = node.data.isolated_extra_peaks if node.data.isolated_extra_peaks is not None else []
-
                 if new_result is None:
-                    status = "error"  
+                    status = "error"
 
-                # Overfitting can lead to extra peaks 
-                # Setting a more tolerant threshold that prevents excluding true phases
-                #elif (len(isolated_extra_peaks) > 0 and \
-                #      np.max(isolated_extra_peaks[:, 1]) / max(new_result.plot_data.y_obs) > 2 * self.false_peak_threshold
-                #):
-                #    status = "extra_peaks"
-            
                 elif abs(grouped_results[phase]["lattice_strain"]) > self.strain_threshold:
                     status = "high_strain"
 
-                # TODO if overfitting is detected for the 2nd layer node, then it might be worth it to permanantly remove the parent node
                 # If removing one phase does not improve the result, this indicats overfitting
                 # Skip removing last refined phase and phases with smallest intensity
                 elif (len(remove_unnecessary_phases(
@@ -645,10 +614,6 @@ class BaseSearchTree(Tree):
                     # When overfitting happens, it denotes that the new pahses explains pattern better than previous ones
                     # Thus, previous phases are no longer needed, we can stop expanding this branch
                     break
-                
-                # Removing low weight fraction check for now
-                #elif is_low_weight_fraction:
-                #    status = "low_weight_fraction"
 
                 # If the new result is worse than the current result from Rpb perspective
                 # This is down here because only after qualification check would RPB increase be meaningful
@@ -681,11 +646,8 @@ class BaseSearchTree(Tree):
                         parent=nid,
                     )
 
-                    
-                    # Set the global early stop flag
-                    #if stop_flag is not None:
-                    #
-                    #    ray.get(stop_flag.set.remote())
+
+                    # Set the global early stop flag (fire-and-forget; not awaited)
                     if stop_flag is not None:
                         stop_flag.set.remote()
                     
@@ -1120,7 +1082,7 @@ class SearchTree(BaseSearchTree):
         record_peak_matcher_scores: bool = False,
         score_coefficients: dict[str, float] | None = None,
         early_stopping: bool = False,
-        grouping_metric: GroupingMetric = "legacy_jaccard",
+        grouping_metric: GroupingMetric = "gaussian_cosine",
         *args,
         **kwargs,
     ):
