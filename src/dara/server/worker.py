@@ -51,11 +51,13 @@ def run_job(uuid):
             worker_store.update(job)
             return result
         except Exception:
+            logger.exception(f"Job {uuid} failed.")
             job["status"] = "FIZZLED"
             job["error"] = format_exc()
             job["end_time"] = datetime.now(tz=timezone.utc)
             worker_store.update(job)
         except KeyboardInterrupt:
+            logger.warning(f"Job {uuid} interrupted.")
             job["status"] = "FIZZLED"
             job["error"] = format_exc()
             worker_store.update(job)

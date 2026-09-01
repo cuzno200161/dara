@@ -5,7 +5,6 @@ import shutil
 import tempfile
 from ast import literal_eval
 from pathlib import Path
-from traceback import print_exc
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
@@ -23,8 +22,11 @@ from dara.structure_db import CODDatabase
 from dara.utils import (
     get_compositional_clusters,
     get_head_of_compositional_cluster,
+    get_logger,
 )
 from dara.xrd import RASXFile, RawFile, XRDMLFile, XYFile
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api")
 
@@ -135,7 +137,7 @@ async def submit(
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
-        print_exc()
+        logger.exception("Failed to submit phase-search job.")
         raise HTTPException(status_code=400, detail=str(e))
 
 

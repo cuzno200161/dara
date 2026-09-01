@@ -307,7 +307,7 @@ class CODDatabase(StructureDatabase):
                 cif = Cif.from_file(temp_file.name)
             cif.filename = str(cod_id)
         except Exception as e:
-            print(f"Failed to download {cod_id}: {e}")
+            logger.error(f"Failed to download {cod_id}: {e}")
             raise
 
         return cif

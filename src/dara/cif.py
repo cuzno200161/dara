@@ -15,6 +15,10 @@ from pymatgen.transformations.advanced_transformations import (
     DisorderOrderedTransformation,
 )
 
+from dara.utils import get_logger
+
+logger = get_logger(__name__)
+
 
 class CifBlock(MSONable, CifBlockPymatgen):
     """Thin wrapper around CifBlock to enable serialization by subclassing MSONable."""
@@ -140,12 +144,14 @@ class Cif(MSONable, CifFile):
         try:
             struct = CifParser.from_str(self.orig_string).parse_structures()[0]
         except Exception:
+            logger.warning(f"Could not parse structure from CIF {self.filename!r}; falling back to filename.")
             return self.filename or "unknown"
 
         formula = get_formula_with_disorder(struct)
         try:
             sg = struct.get_space_group_info()[1]
         except Exception:
+            logger.warning(f"Could not determine space group for CIF {self.filename!r}.")
             sg = "unknown"
 
         return f"{formula}_{sg}"
