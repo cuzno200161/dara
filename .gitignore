@@ -34,6 +34,8 @@ MANIFEST
 uv.lock
 
 dara_downloaded_cifs/
+dara_refined_plots/
+dara_experimental_summary.csv
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -137,6 +139,9 @@ dmypy.json
 example/
 
 BGMNwin/
+
+# Gatsby build output -- run `yarn build` in src/dara/server/ui to regenerate
+src/dara/server/ui/public/
 
 notebooks/cifs/
 notebooks/cifs_cleaned/
