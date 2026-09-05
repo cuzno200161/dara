@@ -87,7 +87,7 @@ def calculate_fom_and_strain(
     geweicht = result.lst_data.phases_results[phase_path.stem].gewicht
     geweicht = get_number(geweicht)
 
-    if refined_a is None or geweicht is None:
+    if refined_a is None or geweicht is None or result.lst_data.rho is None:
         return 0, 0, is_ordered
 
     refined_lattice_abc = [

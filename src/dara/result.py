@@ -143,8 +143,8 @@ class LstResult(BaseModel):
     r: float = Field(alias="R")
     rwp: float = Field(alias="Rwp")
     rexp: float = Field(alias="Rexp")
-    d: float = Field(alias="d")
-    rho: float = Field(alias="1-rho")
+    d: Optional[float] = Field(default=None, alias="d")
+    rho: Optional[float] = Field(default=None, alias="1-rho")
     phases_results: dict[str, PhaseResult]
 
 
@@ -352,12 +352,12 @@ def parse_lst(lst_path: Path, phase_names: list[str]) -> LstResult:
         result[var] = float(re.search(rf"{var}=(\d+(\.\d+)?)%", texts).group(1))
     result["d"] = (
         float(d.group(1))
-        if (d := re.search(r"Durbin-Watson d=(\d+(\.\d+)?)", texts))
+        if (d := re.search(r"Durbin-Watson d=(-?\d+(\.\d+)?)", texts))
         else None
     )
     result["1-rho"] = (
         float(rho.group(1))
-        if (rho := re.search(r"1-rho=(\d+(\.\d+)?)%", texts))
+        if (rho := re.search(r"1-rho=(-?\d+(\.\d+)?)%", texts))
         else None
     )
 
