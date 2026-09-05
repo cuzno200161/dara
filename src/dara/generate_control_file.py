@@ -15,7 +15,8 @@ from dara.utils import read_phase_name_from_str
 
 def copy_instrument_files(instrument_profile: str | Path, working_dir: Path) -> str:
     """
-    Copy the instrument file (.geq) to the working directory.
+    Copy the instrument file (.geq) to the working directory, along with its
+    paired angular-range-extension file (.ger) if one exists.
 
     Args:
         working_dir: the working directory
@@ -39,6 +40,21 @@ def copy_instrument_files(instrument_profile: str | Path, working_dir: Path) -> 
         )
 
     shutil.copy(instrument_path, working_dir)
+
+    # BGMN's control file references VERZERR=<name>.ger for angular-range
+    # extension whenever the .geq's own calibrated range is insufficient for
+    # the pattern being fit. Copy the paired .ger if one exists alongside the
+    # .geq -- without it, eflech fails with "unable to read file
+    # VERZERR=....ger" on any pattern wide enough to need the extension.
+    ger_path = instrument_path.with_suffix(".ger")
+    if ger_path.exists():
+        # BGMN's own parser doesn't tolerate the CRLF line endings these
+        # template files ship with (errors like "wrong expression"/
+        # "expression contains wrong character" right after a numeric value)
+        # -- normalize to LF when copying.
+        content = ger_path.read_bytes().replace(b"\r\n", b"\n")
+        (Path(working_dir) / ger_path.name).write_bytes(content)
+
     return instrument_path.stem
 
 
